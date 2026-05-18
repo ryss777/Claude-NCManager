@@ -18,7 +18,7 @@ export const activateMembershipSchema = tenantRefSchema
     transactionId: z.string().min(1),
   });
 
-export const deductVisitSchema = idempotencySchema.extend({
+export const deductVisitSchema = tenantRefSchema.merge(idempotencySchema).extend({
   membershipId: z.string().min(1),
   customerId: z.string().min(1),
   transactionId: z.string().min(1),
