@@ -1,6 +1,6 @@
-import * as functions from "firebase-functions";
+import { onCall } from "firebase-functions/v2/https";
 
 // TODO: Phase 2 — Inventory Engine implementation
-export const inventory_createMovement = functions.https.onCall(async (_data, _context) => {
+export const inventory_createMovement = onCall(async (_request) => {
   return { status: "not_implemented" };
 });

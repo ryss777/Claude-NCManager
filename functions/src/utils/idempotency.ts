@@ -1,5 +1,5 @@
+import { HttpsError } from "firebase-functions/v2/https";
 import { db } from "./admin";
-import * as functions from "firebase-functions";
 
 export async function checkIdempotency(
   operationId: string,
@@ -10,19 +10,18 @@ export async function checkIdempotency(
 }
 
 export async function markOperationComplete(
+  tx: FirebaseFirestore.Transaction,
   operationId: string,
   collectionPath: string,
   resultData: Record<string, unknown>
 ): Promise<void> {
-  await db.doc(`${collectionPath}/${operationId}`).set({
-    ...resultData,
-    completedAt: new Date().toISOString(),
-  });
+  const ref = db.doc(`${collectionPath}/${operationId}`);
+  tx.set(ref, { ...resultData, completedAt: new Date().toISOString() });
 }
 
 export function throwIfDuplicate(isDuplicate: boolean, operationId: string): void {
   if (isDuplicate) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "already-exists",
       `Operation ${operationId} already processed`
     );

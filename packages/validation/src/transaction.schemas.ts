@@ -35,10 +35,12 @@ export const createTransactionSchema = tenantRefSchema
     { message: "amountPaid must be >= total after discount" }
   );
 
-export const reverseTransactionSchema = idempotencySchema.extend({
-  transactionId: z.string().min(1),
-  reason: z.string().min(10).max(500),
-});
+export const reverseTransactionSchema = tenantRefSchema
+  .merge(idempotencySchema)
+  .extend({
+    transactionId: z.string().min(1),
+    reason: z.string().min(10).max(500),
+  });
 
 export const startMakingSchema = z.object({
   transactionId: z.string().min(1),

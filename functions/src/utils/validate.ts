@@ -1,13 +1,10 @@
-import * as functions from "firebase-functions";
+import { HttpsError, type CallableRequest } from "firebase-functions/v2/https";
 import type { ZodSchema } from "zod";
 
-export function validatePayload<T>(
-  schema: ZodSchema<T>,
-  data: unknown
-): T {
+export function validatePayload<T>(schema: ZodSchema<T>, data: unknown): T {
   const result = schema.safeParse(data);
   if (!result.success) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
       "invalid-argument",
       result.error.issues.map((i) => i.message).join("; ")
     );
@@ -15,28 +12,17 @@ export function validatePayload<T>(
   return result.data;
 }
 
-export function requireAuth(
-  context: functions.https.CallableContext
-): asserts context is functions.https.CallableContext & {
-  auth: NonNullable<functions.https.CallableContext["auth"]>;
+export function requireAuth(request: CallableRequest): asserts request is CallableRequest & {
+  auth: NonNullable<CallableRequest["auth"]>;
 } {
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
-      "unauthenticated",
-      "Authentication required"
-    );
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Authentication required");
   }
 }
 
-export function requireRole(
-  context: functions.https.CallableContext,
-  role: string
-): void {
-  requireAuth(context);
-  if (context.auth.token["role"] !== role) {
-    throw new functions.https.HttpsError(
-      "permission-denied",
-      `Role '${role}' required`
-    );
+export function requireRole(request: CallableRequest, role: string): void {
+  requireAuth(request);
+  if ((request.auth.token as Record<string, unknown>)["role"] !== role) {
+    throw new HttpsError("permission-denied", `Role '${role}' required`);
   }
 }
