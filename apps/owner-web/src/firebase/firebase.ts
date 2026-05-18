@@ -9,6 +9,8 @@ import {
   type User,
 } from "firebase/auth";
 import { getFunctions, httpsCallable, connectFunctionsEmulator } from "firebase/functions";
+import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
+export type { Firestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "",
@@ -26,14 +28,18 @@ export function initFirebase() {
 
   const app = initializeApp(firebaseConfig);
 
-  // Sambungkan ke emulator saat development (berjalan di browser)
   if (process.env.NODE_ENV === "development" && !emulatorsConnected) {
     emulatorsConnected = true;
     connectAuthEmulator(getAuth(app), "http://localhost:9099", { disableWarnings: true });
     connectFunctionsEmulator(getFunctions(app), "localhost", 5001);
+    connectFirestoreEmulator(getFirestore(app), "localhost", 8080);
   }
 
   return app;
+}
+
+export function firebaseDb() {
+  return getFirestore(getApp());
 }
 
 export function firebaseAuth() {
