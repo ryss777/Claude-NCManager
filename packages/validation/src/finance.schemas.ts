@@ -7,7 +7,7 @@ export const openShiftSchema = tenantRefSchema.merge(idempotencySchema).extend({
   openingCash: z.number().min(0),
 });
 
-export const closeShiftSchema = idempotencySchema.extend({
+export const closeShiftSchema = tenantRefSchema.merge(idempotencySchema).extend({
   shiftId: z.string().min(1),
   operatorId: z.string().min(1),
   actualCash: z.number().min(0),
