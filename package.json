@@ -11,7 +11,8 @@
     "test:emulator": "turbo run test:emulator",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
     "clean": "turbo run clean && rimraf node_modules",
-    "emulator": "firebase emulators:start",
+    "build:packages": "pnpm --filter @nc-manager/shared-types build && pnpm --filter @nc-manager/shared-constants build && pnpm --filter @nc-manager/validation build",
+    "emulator": "pnpm run build:packages && pnpm --filter @nc-manager/functions build && firebase emulators:start",
     "seed": "node scripts/seed-emulator.mjs"
   },
   "devDependencies": {
@@ -20,6 +21,11 @@
     "prettier": "^3.5.3",
     "rimraf": "^6.0.1",
     "firebase-admin": "^13.4.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@types/react": "^19.1.0"
+    }
   },
   "engines": {
     "node": ">=20.0.0",

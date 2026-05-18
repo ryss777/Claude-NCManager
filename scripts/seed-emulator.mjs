@@ -107,7 +107,7 @@ async function seed() {
     .doc(`owners/${OWNER_UID}/clubs/${CLUB_ID}/operators/${OPERATOR_ID}`)
     .set({
       operatorId: OPERATOR_ID,
-      name: "Andi Operator",
+      displayName: "Andi Operator",
       pinHash,
       pinSalt: salt,
       role: "operator",

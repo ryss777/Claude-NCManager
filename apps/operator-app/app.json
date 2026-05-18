@@ -3,7 +3,7 @@
     "name": "NC Manager Operator",
     "slug": "nc-manager-operator",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
@@ -12,7 +12,7 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": false,
+      "supportsTablet": true,
       "bundleIdentifier": "com.ncmanager.operator"
     },
     "android": {
@@ -30,6 +30,7 @@
       "expo-secure-store",
       "expo-font"
     ],
+    "newArchEnabled": true,
     "experiments": {
       "typedRoutes": true
     },

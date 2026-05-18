@@ -2,11 +2,23 @@ import {
   SyncQueue,
   RetryEngine,
   MMKVStorageAdapter,
+  MemoryStorageAdapter,
   recoverOnStartup,
   createCallableExecutor,
 } from "@nc-manager/sync-engine";
-import { MMKV } from "react-native-mmkv";
 import { callableFn } from "@/firebase/firebase";
+
+function createStorage(ownerId: string, clubId: string) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { MMKV } = require("react-native-mmkv") as typeof import("react-native-mmkv");
+    const mmkv = new MMKV({ id: `sync_${ownerId}_${clubId}` });
+    return new MMKVStorageAdapter(mmkv);
+  } catch {
+    if (__DEV__) console.warn("[SyncEngine] MMKV unavailable, using in-memory storage");
+    return new MemoryStorageAdapter();
+  }
+}
 
 let queue: SyncQueue | undefined;
 let engine: RetryEngine | undefined;
@@ -18,8 +30,7 @@ let engine: RetryEngine | undefined;
 export function initSyncEngine(ownerId: string, clubId: string) {
   if (queue && engine) return { queue, engine };
 
-  const mmkv = new MMKV({ id: `sync_${ownerId}_${clubId}` });
-  const storage = new MMKVStorageAdapter(mmkv);
+  const storage = createStorage(ownerId, clubId);
   queue = new SyncQueue(storage);
   engine = new RetryEngine(queue, createCallableExecutor(callableFn));
 

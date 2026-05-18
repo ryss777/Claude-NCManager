@@ -2,7 +2,9 @@
   "extends": "@nc-manager/tsconfig/base.json",
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "jsx": "react-native",
     "module": "ESNext",
     "moduleResolution": "Bundler",
@@ -10,9 +12,21 @@
     "noEmit": true,
     "skipLibCheck": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ]
     }
   },
-  "include": ["app", "src", "*.ts", "*.tsx", "src/env.d.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "app",
+    "src",
+    "*.ts",
+    "*.tsx",
+    "src/env.d.ts",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
