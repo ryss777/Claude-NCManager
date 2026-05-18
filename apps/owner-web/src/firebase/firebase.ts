@@ -5,9 +5,10 @@ import {
   signInWithPopup,
   signOut as firebaseSignOut,
   onAuthStateChanged,
+  connectAuthEmulator,
   type User,
 } from "firebase/auth";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable, connectFunctionsEmulator } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "",
@@ -18,9 +19,21 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID ?? "",
 };
 
+let emulatorsConnected = false;
+
 export function initFirebase() {
   if (getApps().length > 0) return getApp();
-  return initializeApp(firebaseConfig);
+
+  const app = initializeApp(firebaseConfig);
+
+  // Sambungkan ke emulator saat development (berjalan di browser)
+  if (process.env.NODE_ENV === "development" && !emulatorsConnected) {
+    emulatorsConnected = true;
+    connectAuthEmulator(getAuth(app), "http://localhost:9099", { disableWarnings: true });
+    connectFunctionsEmulator(getFunctions(app), "localhost", 5001);
+  }
+
+  return app;
 }
 
 export function firebaseAuth() {

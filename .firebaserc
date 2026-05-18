@@ -1,6 +1,6 @@
 {
   "projects": {
-    "default": "nc-manager-staging",
+    "default": "demo-ncmanager",
     "staging": "nc-manager-staging",
     "production": "nc-manager-prod"
   }

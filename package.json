@@ -10,7 +10,9 @@
     "test": "turbo run test",
     "test:emulator": "turbo run test:emulator",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
-    "clean": "turbo run clean && rimraf node_modules"
+    "clean": "turbo run clean && rimraf node_modules",
+    "emulator": "firebase emulators:start",
+    "seed": "node scripts/seed-emulator.mjs"
   },
   "devDependencies": {
     "turbo": "^2.9.14",

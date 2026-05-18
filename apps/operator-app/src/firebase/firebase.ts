@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { initializeAuth, inMemoryPersistence, getAuth } from "firebase/auth";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { initializeAuth, inMemoryPersistence, getAuth, connectAuthEmulator } from "firebase/auth";
+import { getFunctions, httpsCallable, connectFunctionsEmulator } from "firebase/functions";
 import type { CallableFn } from "@nc-manager/sync-engine";
 
 const firebaseConfig = {
@@ -12,21 +12,28 @@ const firebaseConfig = {
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID ?? "",
 };
 
+// Emulator host: localhost untuk iOS simulator, 10.0.2.2 untuk Android emulator,
+// atau IP mesin untuk device fisik (set via EXPO_PUBLIC_EMULATOR_HOST)
+const EMULATOR_HOST = process.env.EXPO_PUBLIC_EMULATOR_HOST ?? "localhost";
+
 export function initFirebase(): void {
   if (getApps().length > 0) return;
+
   const app = initializeApp(firebaseConfig);
-  // React Native: use in-memory auth state; session is restored from SecureStore on startup
-  initializeAuth(app, { persistence: inMemoryPersistence });
+  const auth = initializeAuth(app, { persistence: inMemoryPersistence });
+  const functions = getFunctions(app);
+
+  // Sambungkan ke emulator lokal saat development
+  if (__DEV__) {
+    connectAuthEmulator(auth, `http://${EMULATOR_HOST}:9099`, { disableWarnings: true });
+    connectFunctionsEmulator(functions, EMULATOR_HOST, 5001);
+  }
 }
 
 export function firebaseAuth() {
   return getAuth(getApp());
 }
 
-/**
- * CallableFn wired to the Firebase JS SDK.
- * Injected into createCallableExecutor so sync-engine stays SDK-free.
- */
 export const callableFn: CallableFn = (functionName, data) => {
   const fn = httpsCallable(getFunctions(getApp()), functionName);
   return fn(data).then((result) => result.data as unknown);
