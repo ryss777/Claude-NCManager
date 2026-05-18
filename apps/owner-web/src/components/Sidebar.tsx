@@ -6,11 +6,11 @@ import { signOut } from "@/firebase/firebase";
 import { useOwnerAuthStore } from "@/store/auth.store";
 
 const NAV = [
-  { href: "/(dashboard)", label: "Beranda", icon: "⊞" },
-  { href: "/(dashboard)/finance", label: "Keuangan", icon: "₿" },
-  { href: "/(dashboard)/operators", label: "Operator", icon: "👤" },
-  { href: "/(dashboard)/membership", label: "Paket Member", icon: "⭐" },
-  { href: "/(dashboard)/inventory", label: "Inventaris", icon: "📦" },
+  { href: "/", label: "Beranda", icon: "⊞" },
+  { href: "/finance", label: "Keuangan", icon: "₿" },
+  { href: "/operators", label: "Operator", icon: "👤" },
+  { href: "/membership", label: "Paket Member", icon: "⭐" },
+  { href: "/inventory", label: "Inventaris", icon: "📦" },
 ];
 
 export function Sidebar() {
@@ -34,7 +34,7 @@ export function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-1">
         {NAV.map((item) => {
-          const active = pathname === item.href || (item.href !== "/(dashboard)" && pathname.startsWith(item.href));
+          const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
           return (
             <Link
               key={item.href}

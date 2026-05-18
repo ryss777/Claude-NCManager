@@ -6,10 +6,10 @@ export default function DashboardHome() {
   const { displayName, ownerId, clubId } = useOwnerAuthStore();
 
   const cards = [
-    { label: "Keuangan", desc: "Jurnal & laporan shift", href: "/(dashboard)/finance", color: "bg-blue-50 text-blue-700" },
-    { label: "Operator", desc: "Kelola akses operator", href: "/(dashboard)/operators", color: "bg-green-50 text-green-700" },
-    { label: "Paket Member", desc: "Rencana keanggotaan", href: "/(dashboard)/membership", color: "bg-purple-50 text-purple-700" },
-    { label: "Inventaris", desc: "Level stok produk", href: "/(dashboard)/inventory", color: "bg-orange-50 text-orange-700" },
+    { label: "Keuangan", desc: "Jurnal & laporan shift", href: "/finance", color: "bg-blue-50 text-blue-700" },
+    { label: "Operator", desc: "Kelola akses operator", href: "/operators", color: "bg-green-50 text-green-700" },
+    { label: "Paket Member", desc: "Rencana keanggotaan", href: "/membership", color: "bg-purple-50 text-purple-700" },
+    { label: "Inventaris", desc: "Level stok produk", href: "/inventory", color: "bg-orange-50 text-orange-700" },
   ];
 
   return (
