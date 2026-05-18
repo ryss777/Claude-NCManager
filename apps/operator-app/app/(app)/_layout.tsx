@@ -1,8 +1,12 @@
 import { Redirect, Tabs } from "expo-router";
 import { useAuthStore } from "@/store/auth.store";
+import { useSyncEngine } from "@/hooks/useSyncEngine";
 
 export default function AppLayout() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
+  // Start/stop sync engine with app lifecycle
+  useSyncEngine();
 
   if (!isAuthenticated) {
     return <Redirect href="/(auth)/login" />;
@@ -13,6 +17,8 @@ export default function AppLayout() {
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: "#2563eb",
+        tabBarInactiveTintColor: "#94a3b8",
+        tabBarStyle: { borderTopColor: "#e2e8f0" },
       }}
     >
       <Tabs.Screen name="index" options={{ title: "Beranda" }} />
