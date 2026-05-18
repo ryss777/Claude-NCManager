@@ -1,0 +1,24 @@
+{
+  "name": "@nc-manager/eslint-config",
+  "version": "0.0.1",
+  "private": true,
+  "files": [
+    "*.js",
+    "*.mjs"
+  ],
+  "exports": {
+    "./base": "./base.js",
+    "./next": "./next.js",
+    "./react-native": "./react-native.js"
+  },
+  "peerDependencies": {
+    "eslint": ">=9.0.0"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.32.1",
+    "@typescript-eslint/parser": "^8.32.1",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^15.3.2",
+    "eslint-plugin-import": "^2.31.0"
+  }
+}

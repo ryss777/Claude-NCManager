@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "nc-manager-staging",
+    "staging": "nc-manager-staging",
+    "production": "nc-manager-prod"
+  }
+}

@@ -1,0 +1,172 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && request.auth.token.role == role;
+    }
+
+    function isOwnerOf(ownerId) {
+      return hasRole('owner') && request.auth.token.ownerId == ownerId;
+    }
+
+    function isOperatorOf(ownerId, clubId) {
+      return hasRole('operator')
+        && request.auth.token.ownerId == ownerId
+        && request.auth.token.clubId == clubId;
+    }
+
+    function isCustomerOf(ownerId, clubId) {
+      return hasRole('customer')
+        && request.auth.token.ownerId == ownerId
+        && request.auth.token.clubId == clubId;
+    }
+
+    function isTenantMember(ownerId, clubId) {
+      return isOwnerOf(ownerId)
+        || isOperatorOf(ownerId, clubId)
+        || isCustomerOf(ownerId, clubId);
+    }
+
+    function isDeviceRegistered() {
+      return isAuthenticated()
+        && request.auth.token.deviceId != null
+        && request.auth.token.deviceId != '';
+    }
+
+    function isCompletedTransaction(data) {
+      return data.status == 'completed' || data.status == 'reversed';
+    }
+
+    // ── Owners ───────────────────────────────────────────────────────────────
+
+    match /owners/{ownerId} {
+      allow read: if isOwnerOf(ownerId);
+      allow write: if isOwnerOf(ownerId);
+
+      // ── Clubs ─────────────────────────────────────────────────────────────
+
+      match /clubs/{clubId} {
+        allow read: if isTenantMember(ownerId, clubId);
+        allow write: if isOwnerOf(ownerId);
+
+        // ── Operators ───────────────────────────────────────────────────────
+
+        match /operators/{operatorId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow create, update: if isOwnerOf(ownerId);
+          allow delete: if false; // soft-delete only
+        }
+
+        // ── Registered Devices ──────────────────────────────────────────────
+
+        match /registeredDevices/{deviceId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow create: if isOwnerOf(ownerId);
+          allow update: if isOwnerOf(ownerId) || (isOperatorOf(ownerId, clubId) && isDeviceRegistered());
+          allow delete: if false;
+        }
+
+        // ── Products ────────────────────────────────────────────────────────
+
+        match /products/{productId} {
+          allow read: if isTenantMember(ownerId, clubId);
+          allow write: if isOwnerOf(ownerId);
+        }
+
+        match /productVariants/{variantId} {
+          allow read: if isTenantMember(ownerId, clubId);
+          allow write: if isOwnerOf(ownerId);
+        }
+
+        // ── Customers ───────────────────────────────────────────────────────
+
+        match /customers/{customerId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId)
+            || (isCustomerOf(ownerId, clubId) && request.auth.uid == customerId);
+          allow create: if isOperatorOf(ownerId, clubId) || isCustomerOf(ownerId, clubId);
+          allow update: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId)
+            || (isCustomerOf(ownerId, clubId) && request.auth.uid == customerId);
+          allow delete: if false;
+        }
+
+        // ── Memberships ─────────────────────────────────────────────────────
+
+        match /membershipPlans/{planId} {
+          allow read: if isTenantMember(ownerId, clubId);
+          allow write: if isOwnerOf(ownerId);
+        }
+
+        match /memberships/{membershipId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId)
+            || (isCustomerOf(ownerId, clubId) && resource.data.customerId == request.auth.uid);
+          allow create: if false; // Cloud Function only
+          allow update: if false; // Cloud Function only
+          allow delete: if false;
+        }
+
+        match /membershipVisits/{visitId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId)
+            || (isCustomerOf(ownerId, clubId) && resource.data.customerId == request.auth.uid);
+          allow write: if false; // Cloud Function only
+        }
+
+        // ── Transactions ────────────────────────────────────────────────────
+
+        match /transactions/{transactionId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow create: if false; // Cloud Function only
+          allow update: if false; // Cloud Function only — immutable when completed
+          allow delete: if false;
+        }
+
+        // ── Shifts ──────────────────────────────────────────────────────────
+
+        match /shifts/{shiftId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow create: if false; // Cloud Function only
+          allow update: if false; // Cloud Function only
+          allow delete: if false;
+        }
+
+        // ── Inventory ───────────────────────────────────────────────────────
+
+        match /inventoryItems/{itemId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow write: if isOwnerOf(ownerId);
+        }
+
+        match /inventoryMovements/{movementId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow create: if false; // Cloud Function only
+          allow update: if false; // immutable
+          allow delete: if false;
+        }
+
+        // ── Finance Journal ─────────────────────────────────────────────────
+
+        match /financeJournal/{entryId} {
+          allow read: if isOwnerOf(ownerId);
+          allow create: if false; // Cloud Function only
+          allow update: if false; // append-only, immutable
+          allow delete: if false;
+        }
+
+        // ── Events ──────────────────────────────────────────────────────────
+
+        match /events/{eventId} {
+          allow read: if isOwnerOf(ownerId);
+          allow create: if false; // Cloud Function only
+          allow update: if false; // immutable
+          allow delete: if false;
+        }
+      }
+    }
+  }
+}

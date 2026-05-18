@@ -1,0 +1,35 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwnerOf(ownerId) {
+      return isAuthenticated() && request.auth.token.role == 'owner'
+        && request.auth.token.ownerId == ownerId;
+    }
+
+    function isTenantMember(ownerId, clubId) {
+      return isAuthenticated()
+        && request.auth.token.ownerId == ownerId
+        && (request.auth.token.clubId == clubId || request.auth.token.role == 'owner');
+    }
+
+    // Product images — readable by tenant, writable by owner
+    match /owners/{ownerId}/clubs/{clubId}/products/{fileName} {
+      allow read: if isTenantMember(ownerId, clubId);
+      allow write: if isOwnerOf(ownerId)
+        && request.resource.size < 5 * 1024 * 1024  // 5 MB
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Club assets
+    match /owners/{ownerId}/clubs/{clubId}/assets/{fileName} {
+      allow read: if isTenantMember(ownerId, clubId);
+      allow write: if isOwnerOf(ownerId)
+        && request.resource.size < 10 * 1024 * 1024;  // 10 MB
+    }
+  }
+}
