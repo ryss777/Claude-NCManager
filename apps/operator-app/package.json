@@ -29,12 +29,14 @@
     "zustand": "^5.0.3",
     "react-native-safe-area-context": "4.12.0",
     "react-native-screens": "~4.4.0",
-    "@react-navigation/native": "^7.0.14"
+    "@react-navigation/native": "^7.0.14",
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@nc-manager/tsconfig": "workspace:*",
     "@types/react": "~18.3.12",
+    "@types/uuid": "^10.0.0",
     "typescript": "^5.8.3"
   }
 }
