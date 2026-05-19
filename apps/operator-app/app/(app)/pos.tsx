@@ -7,15 +7,15 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
-  FlatList,
   ActivityIndicator,
 } from "react-native";
+
 import { SafeAreaView } from "react-native-safe-area-context";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, getDocs, query, where, onSnapshot, limit } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { useAuthStore } from "@/store/auth.store";
-import { useEnqueue } from "@/hooks/useEnqueue";
-import { firebaseDb } from "@/firebase/firebase";
+import { callableFn, firebaseDb } from "@/firebase/firebase";
+import { COLLECTIONS } from "@nc-manager/shared-constants";
 
 type PaymentMethod = "cash" | "transfer" | "member_balance";
 
@@ -39,14 +39,24 @@ interface Customer {
   phone: string | null;
 }
 
+interface ActiveShift {
+  id: string;
+  openingCash: number;
+  totalTransactions: number;
+  totalRevenue: number;
+}
+
 export default function PosScreen() {
   const { ownerId, clubId, operatorId } = useAuthStore();
-  const enqueue = useEnqueue();
+
+  // Active shift (undefined = loading, null = no open shift)
+  const [activeShift, setActiveShift] = useState<ActiveShift | null | undefined>(undefined);
 
   // Data from Firestore
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
   // Cart
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -70,6 +80,29 @@ export default function PosScreen() {
         (c.phone ?? "").includes(customerSearch)
       )
     : [];
+
+  // Listen for active shift in real-time
+  useEffect(() => {
+    if (!ownerId || !clubId || !operatorId) return;
+    const q = query(
+      collection(firebaseDb(), COLLECTIONS.SHIFTS(ownerId, clubId)),
+      where("operatorId", "==", operatorId),
+      where("status", "==", "open"),
+      limit(1)
+    );
+    return onSnapshot(
+      q,
+      (snap) => {
+        if (snap.empty) {
+          setActiveShift(null);
+        } else {
+          const d = snap.docs[0]!;
+          setActiveShift({ id: d.id, ...(d.data() as Omit<ActiveShift, "id">) });
+        }
+      },
+      () => setActiveShift(null)
+    );
+  }, [ownerId, clubId, operatorId]);
 
   useEffect(() => {
     if (!ownerId || !clubId) return;
@@ -131,6 +164,10 @@ export default function PosScreen() {
   }
 
   async function submitTransaction() {
+    if (!activeShift) {
+      Alert.alert("Shift Belum Dibuka", "Buka shift di tab Shift terlebih dahulu sebelum bertransaksi.");
+      return;
+    }
     if (cart.length === 0) {
       Alert.alert("Error", "Keranjang kosong");
       return;
@@ -141,36 +178,48 @@ export default function PosScreen() {
     }
     if (!ownerId || !clubId || !operatorId) return;
 
-    const transactionId = uuidv4();
-    const operationId = uuidv4();
-    const requestId = uuidv4();
+    setSubmitting(true);
+    try {
+      const operationId = uuidv4();
+      const requestId = uuidv4();
 
-    enqueue({
-      operationId,
-      requestId,
-      functionName: "pos_completeTransaction",
-      payload: {
-        ownerId, clubId, operatorId, requestId, operationId, transactionId,
-        customerId: selectedCustomer?.id ?? undefined,
+      // 1. Create transaction record with shiftId
+      const { transactionId } = await callableFn("pos_createTransaction", {
+        ownerId,
+        clubId,
+        requestId,
+        operationId,
+        shiftId: activeShift.id,
         paymentMethod,
         amountPaid: paymentMethod === "cash" ? paid : total,
+        customerId: selectedCustomer?.id,
+        discount: 0,
         items: cart.map((i) => ({
           productId: i.productId,
           productName: i.productName,
-          qty: i.qty,
+          modifierIds: [],
+          modifierNames: [],
+          quantity: i.qty,
           unitPrice: i.unitPrice,
+          subtotal: i.qty * i.unitPrice,
         })),
-        totalAmount: total,
-      },
-    });
+      }) as { transactionId: string };
 
-    Alert.alert(
-      "Transaksi Berhasil",
-      paymentMethod === "cash"
-        ? `Total: Rp ${fmt(total)}\nBayar: Rp ${fmt(paid)}\nKembalian: Rp ${fmt(change)}`
-        : `Total: Rp ${fmt(total)}`,
-      [{ text: "OK", onPress: resetForm }]
-    );
+      // 2. Complete transaction — writes journal & updates shift totals
+      await callableFn("pos_completeTransaction", { transactionId, operatorId });
+
+      Alert.alert(
+        "Transaksi Berhasil ✓",
+        paymentMethod === "cash"
+          ? `Total: Rp ${fmt(total)}\nBayar: Rp ${fmt(paid)}\nKembalian: Rp ${fmt(change)}`
+          : `Total: Rp ${fmt(total)}`,
+        [{ text: "OK", onPress: resetForm }]
+      );
+    } catch (err) {
+      Alert.alert("Transaksi Gagal", err instanceof Error ? err.message : "Terjadi kesalahan");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   function resetForm() {
@@ -193,8 +242,28 @@ export default function PosScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Kasir</Text>
-        {loadingData && <ActivityIndicator size="small" color="#94a3b8" />}
+        <View style={styles.headerRight}>
+          {activeShift ? (
+            <View style={styles.shiftActive}>
+              <Text style={styles.shiftActiveText}>● Shift #{activeShift.id.slice(0, 6)}</Text>
+            </View>
+          ) : activeShift === null ? (
+            <View style={styles.shiftClosed}>
+              <Text style={styles.shiftClosedText}>Shift Belum Dibuka</Text>
+            </View>
+          ) : null}
+          {loadingData && <ActivityIndicator size="small" color="#94a3b8" />}
+        </View>
       </View>
+
+      {/* No-shift warning banner */}
+      {activeShift === null && (
+        <View style={styles.noShiftBanner}>
+          <Text style={styles.noShiftText}>
+            ⚠ Buka shift di tab Shift sebelum bertransaksi
+          </Text>
+        </View>
+      )}
 
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
@@ -328,13 +397,18 @@ export default function PosScreen() {
         </View>
 
         <TouchableOpacity
-          style={[styles.submitBtn, (cart.length === 0 || (paymentMethod === "cash" && paid < total && paid > 0)) && styles.submitBtnDisabled]}
+          style={[
+            styles.submitBtn,
+            (!activeShift || cart.length === 0 || submitting || (paymentMethod === "cash" && paid < total && paid > 0)) && styles.submitBtnDisabled,
+          ]}
           onPress={submitTransaction}
-          disabled={cart.length === 0}
+          disabled={!activeShift || cart.length === 0 || submitting}
         >
-          <Text style={styles.submitBtnText}>
-            Bayar Rp {fmt(total)}
-          </Text>
+          {submitting ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.submitBtnText}>Bayar Rp {fmt(total)}</Text>
+          )}
         </TouchableOpacity>
 
         <View style={{ height: 24 }} />
@@ -346,7 +420,14 @@ export default function PosScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f8fafc" },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: 8 },
   title: { fontSize: 22, fontWeight: "700", color: "#1e293b" },
+  shiftActive: { backgroundColor: "#dcfce7", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+  shiftActiveText: { color: "#16a34a", fontWeight: "700", fontSize: 12 },
+  shiftClosed: { backgroundColor: "#fef3c7", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+  shiftClosedText: { color: "#d97706", fontWeight: "600", fontSize: 12 },
+  noShiftBanner: { backgroundColor: "#fef9c3", borderBottomWidth: 1, borderBottomColor: "#fde68a", paddingHorizontal: 16, paddingVertical: 10 },
+  noShiftText: { color: "#92400e", fontSize: 13, fontWeight: "500" },
   scroll: { padding: 16, paddingTop: 8, gap: 12 },
   section: { backgroundColor: "#fff", borderRadius: 12, padding: 14, gap: 10, elevation: 2, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 4 },
   sectionTitle: { fontSize: 13, fontWeight: "600", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 },
