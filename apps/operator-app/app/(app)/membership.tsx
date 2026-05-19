@@ -1,145 +1,459 @@
-import { useState } from "react";
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from "react-native";
+import { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  ScrollView,
+  ActivityIndicator,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { collection, getDocs, query, where, limit } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { useAuthStore } from "@/store/auth.store";
-import { useEnqueue } from "@/hooks/useEnqueue";
+import { callableFn, firebaseDb } from "@/firebase/firebase";
+import { COLLECTIONS } from "@nc-manager/shared-constants";
+
+interface Customer {
+  id: string;
+  displayName: string;
+  phone: string | null;
+  activeMembershipId: string | null;
+}
+
+interface Plan {
+  id: string;
+  name: string;
+  tier: string;
+  price: number;
+  visitQuota: number;
+  durationDays: number;
+  benefits: string[];
+}
+
+interface Membership {
+  id: string;
+  planName: string;
+  tier: string;
+  status: string;
+  visitRemaining: number;
+  visitUsed: number;
+  visitQuota: number;
+  expiresAt: string;
+  activatedAt: string;
+}
+
+const TIER_COLOR: Record<string, { bg: string; text: string; border: string }> = {
+  basic:    { bg: "#f8fafc", text: "#475569", border: "#cbd5e1" },
+  silver:   { bg: "#f1f5f9", text: "#334155", border: "#94a3b8" },
+  gold:     { bg: "#fffbeb", text: "#92400e", border: "#fcd34d" },
+  platinum: { bg: "#eff6ff", text: "#1d4ed8", border: "#93c5fd" },
+};
+
+function fmt(n: number) {
+  return n.toLocaleString("id-ID");
+}
+
+function daysLeft(expiresAt: string) {
+  const diff = new Date(expiresAt).getTime() - Date.now();
+  return Math.max(0, Math.ceil(diff / 86_400_000));
+}
 
 export default function MembershipScreen() {
   const { ownerId, clubId, operatorId } = useAuthStore();
-  const enqueue = useEnqueue();
 
-  // Activate membership
-  const [customerId, setCustomerId] = useState("");
-  const [planId, setPlanId] = useState("");
-  const [planName, setPlanName] = useState("");
-  const [visitQuota, setVisitQuota] = useState("");
-  const [durationDays, setDurationDays] = useState("");
-  const [price, setPrice] = useState("");
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
+
+  // Customer search
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+
+  // Active membership for selected customer
+  const [membership, setMembership] = useState<Membership | null | undefined>(undefined);
+  const [loadingMembership, setLoadingMembership] = useState(false);
+
+  // Plan selection
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "transfer">("cash");
 
-  // Deduct visit
-  const [visitMembershipId, setVisitMembershipId] = useState("");
-  const [visitCustomerId, setVisitCustomerId] = useState("");
+  // Loading states
+  const [activating, setActivating] = useState(false);
+  const [checkingIn, setCheckingIn] = useState(false);
 
-  function handleActivate() {
-    if (!customerId || !planId || !planName || !visitQuota || !durationDays || !price) {
-      Alert.alert("Error", "Semua field wajib diisi");
+  const filteredCustomers =
+    customerSearch.length >= 2
+      ? customers.filter(
+          (c) =>
+            c.displayName.toLowerCase().includes(customerSearch.toLowerCase()) ||
+            (c.phone ?? "").includes(customerSearch)
+        )
+      : [];
+
+  useEffect(() => {
+    if (!ownerId || !clubId) return;
+    loadData();
+  }, [ownerId, clubId]);
+
+  useEffect(() => {
+    if (!selectedCustomer || !ownerId || !clubId) {
+      setMembership(undefined);
       return;
     }
-    if (!ownerId || !clubId || !operatorId) return;
+    loadActiveMembership(selectedCustomer.id);
+  }, [selectedCustomer?.id]);
 
-    const membershipId = uuidv4();
-    const operationId = uuidv4();
-    const requestId = uuidv4();
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + parseInt(durationDays, 10) * 86400000).toISOString();
-
-    enqueue({
-      operationId,
-      requestId,
-      functionName: "membership_activate",
-      payload: {
-        ownerId,
-        clubId,
-        operatorId,
-        requestId,
-        operationId,
-        membershipId,
-        customerId,
-        planId,
-        planName,
-        visitQuota: parseInt(visitQuota, 10),
-        durationDays: parseInt(durationDays, 10),
-        price: parseFloat(price),
-        paymentMethod,
-        startDate: now.toISOString(),
-        expiresAt,
-      },
-    });
-
-    Alert.alert("Berhasil", `Membership ${membershipId.slice(0, 8)}… dijadwalkan`);
-    setCustomerId("");
-    setPlanId("");
-    setPlanName("");
-    setVisitQuota("");
-    setDurationDays("");
-    setPrice("");
+  async function loadData() {
+    setLoadingData(true);
+    try {
+      const db = firebaseDb();
+      const base = `owners/${ownerId}/clubs/${clubId}`;
+      const [custSnap, planSnap] = await Promise.all([
+        getDocs(collection(db, `${base}/customers`)),
+        getDocs(query(collection(db, `${base}/membershipPlans`), where("isActive", "==", true))),
+      ]);
+      setCustomers(custSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Customer, "id">) })));
+      setPlans(planSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Plan, "id">) })));
+    } catch {
+      // Offline
+    } finally {
+      setLoadingData(false);
+    }
   }
 
-  function handleDeductVisit() {
-    if (!visitMembershipId || !visitCustomerId) {
-      Alert.alert("Error", "Masukkan ID membership dan ID customer");
-      return;
+  async function loadActiveMembership(customerId: string) {
+    if (!ownerId || !clubId) return;
+    setLoadingMembership(true);
+    setMembership(undefined);
+    try {
+      const snap = await getDocs(
+        query(
+          collection(firebaseDb(), COLLECTIONS.MEMBERSHIPS(ownerId, clubId)),
+          where("customerId", "==", customerId),
+          where("status", "==", "active"),
+          limit(1)
+        )
+      );
+      setMembership(
+        snap.empty ? null : { id: snap.docs[0]!.id, ...(snap.docs[0]!.data() as Omit<Membership, "id">) }
+      );
+    } catch {
+      setMembership(null);
+    } finally {
+      setLoadingMembership(false);
     }
-    if (!ownerId || !clubId || !operatorId) return;
+  }
 
-    const operationId = uuidv4();
-    const requestId = uuidv4();
+  function selectCustomer(c: Customer) {
+    setSelectedCustomer(c);
+    setCustomerSearch(c.displayName);
+    setShowDropdown(false);
+    setSelectedPlan(null);
+  }
 
-    enqueue({
-      operationId,
-      requestId,
-      functionName: "membership_deductVisit",
-      payload: {
-        ownerId,
-        clubId,
-        operatorId,
-        requestId,
-        operationId,
-        membershipId: visitMembershipId,
-        customerId: visitCustomerId,
-      },
-    });
+  function clearCustomer() {
+    setSelectedCustomer(null);
+    setCustomerSearch("");
+    setMembership(undefined);
+    setSelectedPlan(null);
+  }
 
-    Alert.alert("Check-in", "Kunjungan dicatat dan dijadwalkan ke server");
-    setVisitMembershipId("");
-    setVisitCustomerId("");
+  async function handleCheckIn() {
+    if (!selectedCustomer || !membership || !ownerId || !clubId || !operatorId) return;
+
+    Alert.alert(
+      "Konfirmasi Check-in",
+      `${selectedCustomer.displayName} — sisa ${membership.visitRemaining} kunjungan`,
+      [
+        { text: "Batal", style: "cancel" },
+        {
+          text: "Check-in",
+          onPress: async () => {
+            setCheckingIn(true);
+            try {
+              const result = await callableFn("membership_deductVisit", {
+                ownerId,
+                clubId,
+                operatorId,
+                operationId: uuidv4(),
+                requestId: uuidv4(),
+                membershipId: membership.id,
+                customerId: selectedCustomer.id,
+                transactionId: uuidv4(),
+              }) as { visitId: string; visitsRemaining: number };
+
+              Alert.alert(
+                "Check-in Berhasil ✓",
+                `Sisa kunjungan: ${result.visitsRemaining}`
+              );
+              loadActiveMembership(selectedCustomer.id);
+            } catch (err) {
+              Alert.alert("Gagal", err instanceof Error ? err.message : "Terjadi kesalahan");
+            } finally {
+              setCheckingIn(false);
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  async function handleActivate() {
+    if (!selectedCustomer || !selectedPlan || !ownerId || !clubId) return;
+
+    const action = membership ? "Perpanjang" : "Aktifkan";
+    Alert.alert(
+      `${action} Membership`,
+      `${selectedCustomer.displayName}\nPaket: ${selectedPlan.name}\nHarga: Rp ${fmt(selectedPlan.price)}`,
+      [
+        { text: "Batal", style: "cancel" },
+        {
+          text: action,
+          onPress: async () => {
+            setActivating(true);
+            try {
+              const result = await callableFn("membership_activate", {
+                ownerId,
+                clubId,
+                operationId: uuidv4(),
+                requestId: uuidv4(),
+                customerId: selectedCustomer.id,
+                planId: selectedPlan.id,
+                transactionId: uuidv4(),
+              }) as { membershipId: string; expiresAt: string };
+
+              const expires = result.expiresAt.slice(0, 10);
+              Alert.alert("Berhasil!", `Membership aktif s/d ${expires}`);
+              loadActiveMembership(selectedCustomer.id);
+              setSelectedPlan(null);
+            } catch (err) {
+              Alert.alert("Gagal", err instanceof Error ? err.message : "Terjadi kesalahan");
+            } finally {
+              setActivating(false);
+            }
+          },
+        },
+      ]
+    );
   }
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Keanggotaan</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Keanggotaan</Text>
+        {loadingData && <ActivityIndicator size="small" color="#94a3b8" />}
+      </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Activate */}
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+
+        {/* ── Customer search ── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Aktifkan Membership</Text>
-          <TextInput style={styles.input} placeholder="ID Customer" value={customerId} onChangeText={setCustomerId} autoCapitalize="none" />
-          <TextInput style={styles.input} placeholder="ID Paket" value={planId} onChangeText={setPlanId} autoCapitalize="none" />
-          <TextInput style={styles.input} placeholder="Nama Paket" value={planName} onChangeText={setPlanName} />
-          <View style={styles.row}>
-            <TextInput style={[styles.input, styles.flex1]} placeholder="Kuota Kunjungan" value={visitQuota} onChangeText={setVisitQuota} keyboardType="numeric" />
-            <TextInput style={[styles.input, styles.flex1]} placeholder="Durasi (hari)" value={durationDays} onChangeText={setDurationDays} keyboardType="numeric" />
-          </View>
-          <TextInput style={styles.input} placeholder="Harga" value={price} onChangeText={setPrice} keyboardType="numeric" />
-          <View style={styles.row}>
-            {(["cash", "transfer"] as const).map((m) => (
-              <TouchableOpacity
-                key={m}
-                style={[styles.payBtn, paymentMethod === m && styles.payBtnActive]}
-                onPress={() => setPaymentMethod(m)}
-              >
-                <Text style={[styles.payBtnText, paymentMethod === m && styles.payBtnTextActive]}>
-                  {m === "cash" ? "Tunai" : "Transfer"}
+          <Text style={styles.sectionTitle}>Cari Pelanggan</Text>
+          {selectedCustomer ? (
+            <View style={styles.selectedCustomer}>
+              <View style={styles.customerAvatar}>
+                <Text style={styles.customerAvatarText}>
+                  {selectedCustomer.displayName.charAt(0).toUpperCase()}
                 </Text>
+              </View>
+              <View style={styles.customerInfo}>
+                <Text style={styles.customerName}>{selectedCustomer.displayName}</Text>
+                {selectedCustomer.phone && (
+                  <Text style={styles.customerPhone}>{selectedCustomer.phone}</Text>
+                )}
+              </View>
+              <TouchableOpacity onPress={clearCustomer} style={styles.clearBtn}>
+                <Text style={styles.clearBtnText}>Ganti</Text>
               </TouchableOpacity>
-            ))}
-          </View>
-          <TouchableOpacity style={styles.primaryBtn} onPress={handleActivate}>
-            <Text style={styles.primaryBtnText}>Aktifkan</Text>
-          </TouchableOpacity>
+            </View>
+          ) : (
+            <View>
+              <TextInput
+                style={styles.input}
+                placeholder="Ketik nama / no. HP (min 2 karakter)"
+                value={customerSearch}
+                onChangeText={(v) => { setCustomerSearch(v); setShowDropdown(true); }}
+              />
+              {showDropdown && filteredCustomers.length > 0 && (
+                <View style={styles.dropdown}>
+                  {filteredCustomers.slice(0, 6).map((c) => (
+                    <TouchableOpacity
+                      key={c.id}
+                      style={styles.dropdownItem}
+                      onPress={() => selectCustomer(c)}
+                    >
+                      <Text style={styles.dropdownName}>{c.displayName}</Text>
+                      {c.phone && <Text style={styles.dropdownPhone}>{c.phone}</Text>}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
         </View>
 
-        {/* Check-in */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Check-in Kunjungan</Text>
-          <TextInput style={styles.input} placeholder="ID Membership" value={visitMembershipId} onChangeText={setVisitMembershipId} autoCapitalize="none" />
-          <TextInput style={styles.input} placeholder="ID Customer" value={visitCustomerId} onChangeText={setVisitCustomerId} autoCapitalize="none" />
-          <TouchableOpacity style={styles.secondaryBtn} onPress={handleDeductVisit}>
-            <Text style={styles.secondaryBtnText}>Catat Kunjungan</Text>
-          </TouchableOpacity>
-        </View>
+        {/* ── Membership status ── */}
+        {selectedCustomer && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Status Membership</Text>
+
+            {loadingMembership || membership === undefined ? (
+              <ActivityIndicator color="#94a3b8" style={{ paddingVertical: 12 }} />
+            ) : membership === null ? (
+              <View style={styles.noMembership}>
+                <Text style={styles.noMembershipText}>Belum punya membership aktif</Text>
+              </View>
+            ) : (
+              <View>
+                {/* Membership card */}
+                <View style={[
+                  styles.membershipCard,
+                  { borderColor: TIER_COLOR[membership.tier]?.border ?? "#e2e8f0" },
+                  { backgroundColor: TIER_COLOR[membership.tier]?.bg ?? "#f8fafc" },
+                ]}>
+                  <View style={styles.membershipCardHeader}>
+                    <Text style={[styles.tierBadge, { color: TIER_COLOR[membership.tier]?.text ?? "#475569" }]}>
+                      ★ {membership.tier.toUpperCase()}
+                    </Text>
+                    <Text style={styles.membershipPlanName}>{membership.planName}</Text>
+                  </View>
+
+                  {/* Visit bar */}
+                  <View style={styles.visitBarWrap}>
+                    <View style={styles.visitBarBg}>
+                      <View
+                        style={[
+                          styles.visitBarFill,
+                          { width: `${Math.min((membership.visitRemaining / membership.visitQuota) * 100, 100)}%` },
+                        ]}
+                      />
+                    </View>
+                    <Text style={styles.visitText}>
+                      {membership.visitRemaining} / {membership.visitQuota} kunjungan tersisa
+                    </Text>
+                  </View>
+
+                  <View style={styles.membershipMeta}>
+                    <Text style={styles.metaText}>
+                      Berlaku s/d {membership.expiresAt.slice(0, 10)}
+                    </Text>
+                    <Text style={[
+                      styles.daysLeft,
+                      daysLeft(membership.expiresAt) <= 7 && styles.daysLeftWarning,
+                    ]}>
+                      {daysLeft(membership.expiresAt)} hari lagi
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Check-in button */}
+                <TouchableOpacity
+                  style={[
+                    styles.checkInBtn,
+                    (membership.visitRemaining <= 0 || checkingIn) && styles.disabledBtn,
+                  ]}
+                  onPress={handleCheckIn}
+                  disabled={membership.visitRemaining <= 0 || checkingIn}
+                >
+                  {checkingIn ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.checkInBtnText}>
+                      {membership.visitRemaining <= 0 ? "Kuota Habis" : "✓ Check-in Kunjungan"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* ── Plan selection ── */}
+        {selectedCustomer && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>
+              {membership ? "Perpanjang / Ganti Paket" : "Pilih Paket Membership"}
+            </Text>
+
+            {plans.length === 0 ? (
+              <Text style={styles.emptyText}>Belum ada paket tersedia.</Text>
+            ) : (
+              <View style={styles.planGrid}>
+                {plans.map((plan) => {
+                  const tc = TIER_COLOR[plan.tier] ?? TIER_COLOR.basic!;
+                  const isSelected = selectedPlan?.id === plan.id;
+                  return (
+                    <TouchableOpacity
+                      key={plan.id}
+                      style={[
+                        styles.planCard,
+                        { borderColor: isSelected ? "#2563eb" : tc.border },
+                        { backgroundColor: isSelected ? "#eff6ff" : tc.bg },
+                      ]}
+                      onPress={() => setSelectedPlan(isSelected ? null : plan)}
+                    >
+                      <Text style={[styles.planTier, { color: tc.text }]}>
+                        {plan.tier.toUpperCase()}
+                      </Text>
+                      <Text style={styles.planName} numberOfLines={2}>{plan.name}</Text>
+                      <Text style={styles.planPrice}>Rp {fmt(plan.price)}</Text>
+                      <Text style={styles.planMeta}>
+                        {plan.visitQuota}x · {plan.durationDays} hari
+                      </Text>
+                      {isSelected && (
+                        <View style={styles.selectedMark}>
+                          <Text style={styles.selectedMarkText}>✓</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {selectedPlan && (
+              <View style={styles.activatePanel}>
+                <Text style={styles.activatePlanLabel}>
+                  {selectedPlan.name} — Rp {fmt(selectedPlan.price)}
+                </Text>
+
+                <View style={styles.paymentRow}>
+                  {(["cash", "transfer"] as const).map((m) => (
+                    <TouchableOpacity
+                      key={m}
+                      style={[styles.payBtn, paymentMethod === m && styles.payBtnActive]}
+                      onPress={() => setPaymentMethod(m)}
+                    >
+                      <Text style={[styles.payBtnText, paymentMethod === m && styles.payBtnTextActive]}>
+                        {m === "cash" ? "Tunai" : "Transfer"}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.activateBtn, activating && styles.disabledBtn]}
+                  onPress={handleActivate}
+                  disabled={activating}
+                >
+                  {activating ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.activateBtnText}>
+                      {membership ? "Perpanjang Membership" : "Aktifkan Membership"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
+        <View style={{ height: 24 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -147,54 +461,118 @@ export default function MembershipScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f8fafc" },
-  title: { fontSize: 22, fontWeight: "700", color: "#1e293b", padding: 16, paddingBottom: 8 },
-  scroll: { padding: 16, paddingTop: 0, gap: 16 },
+  header: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4,
+  },
+  title: { fontSize: 22, fontWeight: "700", color: "#1e293b" },
+  scroll: { padding: 16, paddingTop: 8, gap: 12 },
+
   section: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    gap: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    backgroundColor: "#fff", borderRadius: 12, padding: 16, gap: 10,
+    shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
   },
-  sectionTitle: { fontSize: 16, fontWeight: "600", color: "#374151", marginBottom: 4 },
+  sectionTitle: {
+    fontSize: 13, fontWeight: "600", color: "#64748b",
+    textTransform: "uppercase", letterSpacing: 0.5,
+  },
+
+  // Customer search
   input: {
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: "#1e293b",
-    backgroundColor: "#f8fafc",
+    borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 15,
+    color: "#1e293b", backgroundColor: "#f8fafc",
   },
-  row: { flexDirection: "row", gap: 8 },
-  flex1: { flex: 1 },
+  dropdown: {
+    backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e8f0",
+    borderRadius: 8, marginTop: 4, overflow: "hidden",
+  },
+  dropdownItem: {
+    paddingHorizontal: 12, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: "#f1f5f9",
+  },
+  dropdownName: { fontSize: 14, color: "#1e293b", fontWeight: "500" },
+  dropdownPhone: { fontSize: 12, color: "#94a3b8", marginTop: 1 },
+
+  selectedCustomer: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    backgroundColor: "#f0fdf4", borderRadius: 10, padding: 12,
+  },
+  customerAvatar: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: "#16a34a", alignItems: "center", justifyContent: "center",
+  },
+  customerAvatarText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+  customerInfo: { flex: 1 },
+  customerName: { fontSize: 15, fontWeight: "600", color: "#166534" },
+  customerPhone: { fontSize: 12, color: "#4ade80", marginTop: 1 },
+  clearBtn: { paddingHorizontal: 10, paddingVertical: 6 },
+  clearBtnText: { fontSize: 13, color: "#2563eb", fontWeight: "600" },
+
+  // Membership card
+  noMembership: {
+    backgroundColor: "#f8fafc", borderRadius: 8, padding: 16, alignItems: "center",
+  },
+  noMembershipText: { color: "#94a3b8", fontSize: 14 },
+
+  membershipCard: {
+    borderWidth: 1.5, borderRadius: 12, padding: 14, gap: 10, marginBottom: 10,
+  },
+  membershipCardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  tierBadge: { fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },
+  membershipPlanName: { fontSize: 15, fontWeight: "700", color: "#1e293b" },
+
+  visitBarWrap: { gap: 4 },
+  visitBarBg: { height: 8, backgroundColor: "#e2e8f0", borderRadius: 4, overflow: "hidden" },
+  visitBarFill: { height: "100%", backgroundColor: "#16a34a", borderRadius: 4 },
+  visitText: { fontSize: 12, color: "#475569" },
+
+  membershipMeta: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  metaText: { fontSize: 12, color: "#64748b" },
+  daysLeft: { fontSize: 12, fontWeight: "600", color: "#16a34a" },
+  daysLeftWarning: { color: "#dc2626" },
+
+  checkInBtn: {
+    backgroundColor: "#16a34a", borderRadius: 10, paddingVertical: 14, alignItems: "center",
+  },
+  checkInBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+
+  // Plan grid
+  emptyText: { color: "#94a3b8", fontSize: 14, textAlign: "center", paddingVertical: 8 },
+  planGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  planCard: {
+    width: "47%", borderWidth: 1.5, borderRadius: 10, padding: 12, gap: 4, position: "relative",
+  },
+  planTier: { fontSize: 10, fontWeight: "700", letterSpacing: 0.5 },
+  planName: { fontSize: 13, fontWeight: "700", color: "#1e293b" },
+  planPrice: { fontSize: 14, fontWeight: "700", color: "#2563eb" },
+  planMeta: { fontSize: 11, color: "#94a3b8" },
+  selectedMark: {
+    position: "absolute", top: 6, right: 8,
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: "#2563eb", alignItems: "center", justifyContent: "center",
+  },
+  selectedMarkText: { color: "#fff", fontSize: 11, fontWeight: "700" },
+
+  // Activate panel
+  activatePanel: {
+    backgroundColor: "#f8fafc", borderRadius: 10, padding: 14, gap: 10,
+    borderWidth: 1, borderColor: "#e2e8f0",
+  },
+  activatePlanLabel: { fontSize: 14, fontWeight: "600", color: "#1e293b" },
+  paymentRow: { flexDirection: "row", gap: 8 },
   payBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    alignItems: "center",
+    flex: 1, paddingVertical: 10, borderRadius: 8,
+    borderWidth: 1, borderColor: "#e2e8f0", alignItems: "center",
   },
   payBtnActive: { borderColor: "#9333ea", backgroundColor: "#faf5ff" },
   payBtnText: { fontSize: 14, color: "#64748b" },
   payBtnTextActive: { color: "#9333ea", fontWeight: "700" },
-  primaryBtn: {
-    backgroundColor: "#9333ea",
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: "center",
+
+  activateBtn: {
+    backgroundColor: "#9333ea", borderRadius: 10, paddingVertical: 14, alignItems: "center",
   },
-  primaryBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  secondaryBtn: {
-    backgroundColor: "#6366f1",
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  secondaryBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  activateBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+
+  disabledBtn: { opacity: 0.5 },
 });
