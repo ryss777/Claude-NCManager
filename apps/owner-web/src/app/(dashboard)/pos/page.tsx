@@ -92,11 +92,17 @@ export default function OwnerPosPage() {
   const change = paid - subtotal;
 
   const filteredProducts = products.filter((p) => {
+    if (!p.prices) return false;
     const matchCat = categoryFilter === "Semua" || p.category === categoryFilter;
     const matchSearch =
       !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase());
     return matchCat && matchSearch;
   });
+
+  function tierPrice(p: Product): number {
+    if (!p.prices) return 0;
+    return p.prices[activeTier] ?? p.prices.retail ?? 0;
+  }
 
   const filteredCustomers =
     customerSearch.length >= 2
@@ -131,7 +137,7 @@ export default function OwnerPosPage() {
   const activeTier: CustomerTier = selectedCustomer?.tier ?? "retail";
 
   function addProduct(p: Product) {
-    const unitPrice = p.prices[activeTier] ?? p.prices.retail;
+    const unitPrice = tierPrice(p);
     setCart((prev) => {
       const idx = prev.findIndex((i) => i.productId === p.id);
       if (idx >= 0)
@@ -279,7 +285,7 @@ export default function OwnerPosPage() {
                   )}
                   <p className="text-xs text-slate-400 mb-1">{p.category}</p>
                   <p className="text-sm font-semibold text-slate-800 leading-tight mb-2">{p.name}</p>
-                  <p className="text-base font-bold text-blue-700">{fmtIdr(p.prices[activeTier] ?? p.prices.retail)}</p>
+                  <p className="text-base font-bold text-blue-700">{fmtIdr(tierPrice(p))}</p>
                   {activeTier !== "retail" && (
                     <p className="text-xs text-slate-400">{TIER_LABELS[activeTier]}</p>
                   )}

@@ -133,8 +133,13 @@ export default function PosScreen() {
 
   const activeTier: CustomerTier = selectedCustomer?.tier ?? "retail";
 
+  function tierPrice(p: Product): number {
+    if (!p.prices) return 0;
+    return p.prices[activeTier] ?? p.prices.retail ?? 0;
+  }
+
   function addProduct(p: Product) {
-    const unitPrice = p.prices[activeTier] ?? p.prices.retail;
+    const unitPrice = tierPrice(p);
     setCart((c) => {
       const idx = c.findIndex((i) => i.productId === p.id);
       if (idx >= 0) {
@@ -282,7 +287,7 @@ export default function PosScreen() {
               {products.map((p) => (
                 <TouchableOpacity key={p.id} style={styles.productCard} onPress={() => addProduct(p)}>
                   <Text style={styles.productName} numberOfLines={2}>{p.name}</Text>
-                  <Text style={styles.productPrice}>Rp {fmt(p.prices[activeTier] ?? p.prices.retail)}</Text>
+                  <Text style={styles.productPrice}>Rp {fmt(tierPrice(p))}</Text>
                 </TouchableOpacity>
               ))}
             </View>
