@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs, query, orderBy, updateDoc, deleteDoc, doc } from "firebase/firestore";
+import { collection, getDocs, query, orderBy, where, updateDoc, deleteDoc, doc } from "firebase/firestore";
 import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
 
@@ -46,6 +46,16 @@ export default function MembershipPage() {
   const [benefits, setBenefits] = useState("");
   const [loading, setLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
+
+  // Confirm dialog
+  interface AffectedCustomer { id: string; displayName: string; visitRemaining: number; }
+  const [confirmDialog, setConfirmDialog] = useState<{
+    type: "deactivate" | "delete";
+    plan: Plan;
+    customers: AffectedCustomer[];
+    loadingCustomers: boolean;
+  } | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
 
   // Edit state
   const [editId, setEditId] = useState<string | null>(null);
@@ -136,26 +146,53 @@ export default function MembershipPage() {
     } finally { setEditSaving(false); }
   }
 
-  async function toggleActive(p: Plan) {
+  async function openConfirm(p: Plan, type: "deactivate" | "delete") {
+    if (!ownerId || !clubId) return;
+    setConfirmDialog({ type, plan: p, customers: [], loadingCustomers: true });
+
     try {
-      await updateDoc(doc(firebaseDb(), planPath(p.id)), {
-        isActive: !p.isActive,
-        updatedAt: new Date().toISOString(),
-      });
-      loadPlans();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal");
+      const db = firebaseDb();
+      const base = `owners/${ownerId}/clubs/${clubId}`;
+      const [memSnap, custSnap] = await Promise.all([
+        getDocs(query(
+          collection(db, `${base}/memberships`),
+          where("planId", "==", p.id),
+          where("status", "==", "active")
+        )),
+        getDocs(collection(db, `${base}/customers`)),
+      ]);
+
+      const custMap = new Map(custSnap.docs.map((d) => [d.id, d.data()["displayName"] as string]));
+      const affected: AffectedCustomer[] = memSnap.docs.map((d) => ({
+        id: d.data()["customerId"] as string,
+        displayName: custMap.get(d.data()["customerId"] as string) ?? d.data()["customerId"] as string,
+        visitRemaining: d.data()["visitRemaining"] as number,
+      }));
+
+      setConfirmDialog((prev) => prev ? { ...prev, customers: affected, loadingCustomers: false } : null);
+    } catch {
+      setConfirmDialog((prev) => prev ? { ...prev, loadingCustomers: false } : null);
     }
   }
 
-  async function handleDelete(p: Plan) {
-    if (!confirm(`Hapus paket "${p.name}"? Tindakan ini tidak dapat dibatalkan.\n\nMembership aktif yang menggunakan paket ini tidak terpengaruh.`)) return;
+  async function executeConfirm() {
+    if (!confirmDialog) return;
+    const { type, plan } = confirmDialog;
+    setConfirmLoading(true);
     try {
-      await deleteDoc(doc(firebaseDb(), planPath(p.id)));
+      if (type === "deactivate") {
+        await updateDoc(doc(firebaseDb(), planPath(plan.id)), {
+          isActive: !plan.isActive,
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        await deleteDoc(doc(firebaseDb(), planPath(plan.id)));
+      }
+      setConfirmDialog(null);
       loadPlans();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal menghapus");
-    }
+      alert(err instanceof Error ? err.message : "Gagal");
+    } finally { setConfirmLoading(false); }
   }
 
   const active = plans.filter((p) => p.isActive);
@@ -163,6 +200,78 @@ export default function MembershipPage() {
 
   return (
     <div>
+      {/* Confirmation dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4">
+            {/* Header */}
+            <div className="flex items-start gap-3 mb-4">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${confirmDialog.type === "delete" ? "bg-red-100" : "bg-amber-100"}`}>
+                <span className="text-lg">{confirmDialog.type === "delete" ? "🗑️" : "⚠️"}</span>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {confirmDialog.type === "delete" ? "Hapus" : confirmDialog.plan.isActive ? "Nonaktifkan" : "Aktifkan"} Paket
+                </h3>
+                <p className="text-sm text-slate-500 mt-0.5">{confirmDialog.plan.name}</p>
+              </div>
+            </div>
+
+            {/* Affected customers */}
+            <div className="mb-5">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+                Customer dengan membership aktif di paket ini
+              </p>
+              {confirmDialog.loadingCustomers ? (
+                <p className="text-sm text-slate-400 py-3 text-center">Memuat daftar customer…</p>
+              ) : confirmDialog.customers.length === 0 ? (
+                <div className="bg-green-50 rounded-xl px-4 py-3">
+                  <p className="text-sm text-green-700">Tidak ada customer yang terdampak.</p>
+                </div>
+              ) : (
+                <div className="border border-amber-200 rounded-xl overflow-hidden">
+                  <div className="bg-amber-50 px-4 py-2 flex justify-between text-xs font-semibold text-amber-700">
+                    <span>{confirmDialog.customers.length} customer terdampak</span>
+                  </div>
+                  <div className="divide-y divide-slate-100 max-h-48 overflow-y-auto">
+                    {confirmDialog.customers.map((c) => (
+                      <div key={c.id} className="flex items-center justify-between px-4 py-2.5">
+                        <span className="text-sm text-slate-800 font-medium">{c.displayName}</span>
+                        <span className="text-xs text-slate-400">{c.visitRemaining} kunjungan tersisa</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                disabled={confirmLoading}
+                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50 transition"
+              >
+                Batal
+              </button>
+              <button
+                onClick={executeConfirm}
+                disabled={confirmLoading || confirmDialog.loadingCustomers}
+                className={`flex-1 text-white rounded-xl py-2.5 text-sm font-semibold disabled:opacity-50 transition ${
+                  confirmDialog.type === "delete"
+                    ? "bg-red-600 hover:bg-red-700"
+                    : confirmDialog.plan.isActive
+                    ? "bg-amber-600 hover:bg-amber-700"
+                    : "bg-green-600 hover:bg-green-700"
+                }`}
+              >
+                {confirmLoading ? "Memproses…" : confirmDialog.type === "delete" ? "Ya, Hapus" : confirmDialog.plan.isActive ? "Ya, Nonaktifkan" : "Ya, Aktifkan"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h2 className="text-2xl font-bold text-slate-900 mb-6">Paket Keanggotaan</h2>
 
       <div className="flex gap-6">
@@ -290,13 +399,13 @@ export default function MembershipPage() {
                               Edit
                             </button>
                             <button
-                              onClick={() => toggleActive(p)}
+                              onClick={() => openConfirm(p, "deactivate")}
                               className="flex-1 text-xs text-amber-600 hover:text-amber-800 font-medium py-1"
                             >
                               Nonaktifkan
                             </button>
                             <button
-                              onClick={() => handleDelete(p)}
+                              onClick={() => openConfirm(p, "delete")}
                               className="flex-1 text-xs text-red-500 hover:text-red-700 font-medium py-1"
                             >
                               Hapus
@@ -333,13 +442,13 @@ export default function MembershipPage() {
                         </p>
                         <div className="flex gap-2 border-t border-slate-100 pt-3">
                           <button
-                            onClick={() => toggleActive(p)}
+                            onClick={() => openConfirm(p, "deactivate")}
                             className="flex-1 text-xs text-green-600 hover:text-green-800 font-medium py-1"
                           >
                             Aktifkan
                           </button>
                           <button
-                            onClick={() => handleDelete(p)}
+                            onClick={() => openConfirm(p, "delete")}
                             className="flex-1 text-xs text-red-500 hover:text-red-700 font-medium py-1"
                           >
                             Hapus
