@@ -134,36 +134,44 @@ async function seed() {
   await db
     .doc(`owners/${OWNER_UID}/clubs/${CLUB_ID}/membershipPlans/plan-silver`)
     .set({
-      planId: "plan-silver",
-      planName: "Paket Silver",
+      id: "plan-silver",
+      ownerId: OWNER_UID,
+      clubId: CLUB_ID,
+      name: "Paket Silver",
+      tier: "silver",
       visitQuota: 20,
       durationDays: 30,
       price: 250000,
-      description: "20 kunjungan, berlaku 30 hari",
+      benefits: ["20 kunjungan", "Berlaku 30 hari"],
       isActive: true,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
 
   await db
     .doc(`owners/${OWNER_UID}/clubs/${CLUB_ID}/membershipPlans/plan-gold`)
     .set({
-      planId: "plan-gold",
-      planName: "Paket Gold",
+      id: "plan-gold",
+      ownerId: OWNER_UID,
+      clubId: CLUB_ID,
+      name: "Paket Gold",
+      tier: "gold",
       visitQuota: 50,
       durationDays: 30,
       price: 500000,
-      description: "50 kunjungan, berlaku 30 hari",
+      benefits: ["50 kunjungan", "Berlaku 30 hari", "Akses semua fasilitas"],
       isActive: true,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
 
   console.log(`✅ Firestore: membership plans (silver, gold)`);
 
   // 7. Contoh produk inventory
   const products = [
-    { id: "prod-001", name: "Protein Shake Vanilla", currentStock: 50, unit: "botol" },
-    { id: "prod-002", name: "Protein Shake Coklat", currentStock: 30, unit: "botol" },
-    { id: "prod-003", name: "Energy Bar", currentStock: 100, unit: "pcs" },
+    { id: "item-001", name: "Protein Shake Vanilla", sku: "PSV-001", unit: "botol", currentStock: 50, minimumStock: 5, costPerUnit: 45000 },
+    { id: "item-002", name: "Protein Shake Coklat", sku: "PSC-001", unit: "botol", currentStock: 30, minimumStock: 5, costPerUnit: 45000 },
+    { id: "item-003", name: "Energy Bar", sku: "EB-001", unit: "pcs", currentStock: 100, minimumStock: 10, costPerUnit: 15000 },
   ];
 
   for (const p of products) {
@@ -171,7 +179,6 @@ async function seed() {
       .doc(`owners/${OWNER_UID}/clubs/${CLUB_ID}/inventoryItems/${p.id}`)
       .set({
         ...p,
-        price: 45000,
         isActive: true,
         createdAt: new Date().toISOString(),
       });
