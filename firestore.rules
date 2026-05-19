@@ -40,10 +40,6 @@ service cloud.firestore {
         && request.auth.token.deviceId != '';
     }
 
-    function isCompletedTransaction(data) {
-      return data.status == 'completed' || data.status == 'reversed';
-    }
-
     // ── Owners ───────────────────────────────────────────────────────────────
 
     match /owners/{ownerId} {
@@ -69,7 +65,8 @@ service cloud.firestore {
         match /registeredDevices/{deviceId} {
           allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
           allow create: if isOwnerOf(ownerId);
-          allow update: if isOwnerOf(ownerId) || (isOperatorOf(ownerId, clubId) && isDeviceRegistered());
+          allow update: if isOwnerOf(ownerId)
+            || (isOperatorOf(ownerId, clubId) && isDeviceRegistered());
           allow delete: if false;
         }
 
@@ -88,39 +85,52 @@ service cloud.firestore {
         // ── Customers ───────────────────────────────────────────────────────
 
         match /customers/{customerId} {
-          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId)
+          allow read: if isOwnerOf(ownerId)
+            || isOperatorOf(ownerId, clubId)
             || (isCustomerOf(ownerId, clubId) && request.auth.uid == customerId);
-          allow create: if isOperatorOf(ownerId, clubId) || isCustomerOf(ownerId, clubId);
-          allow update: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId)
+          allow create: if isOwnerOf(ownerId)
+            || isOperatorOf(ownerId, clubId)
+            || isCustomerOf(ownerId, clubId);
+          allow update: if isOwnerOf(ownerId)
+            || isOperatorOf(ownerId, clubId)
             || (isCustomerOf(ownerId, clubId) && request.auth.uid == customerId);
           allow delete: if false;
         }
 
-        // ── Memberships ─────────────────────────────────────────────────────
+        // ── Membership Plans ────────────────────────────────────────────────
 
         match /membershipPlans/{planId} {
           allow read: if isTenantMember(ownerId, clubId);
           allow write: if isOwnerOf(ownerId);
         }
 
+        // ── Memberships ─────────────────────────────────────────────────────
+
         match /memberships/{membershipId} {
-          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId)
-            || (isCustomerOf(ownerId, clubId) && resource.data.customerId == request.auth.uid);
+          allow read: if isOwnerOf(ownerId)
+            || isOperatorOf(ownerId, clubId)
+            || (isCustomerOf(ownerId, clubId)
+                && resource.data.customerId == request.auth.uid);
           allow create: if false; // Cloud Function only
           allow update: if false; // Cloud Function only
           allow delete: if false;
         }
 
         match /membershipVisits/{visitId} {
-          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId)
-            || (isCustomerOf(ownerId, clubId) && resource.data.customerId == request.auth.uid);
+          allow read: if isOwnerOf(ownerId)
+            || isOperatorOf(ownerId, clubId)
+            || (isCustomerOf(ownerId, clubId)
+                && resource.data.customerId == request.auth.uid);
           allow write: if false; // Cloud Function only
         }
 
         // ── Transactions ────────────────────────────────────────────────────
 
         match /transactions/{transactionId} {
-          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow read: if isOwnerOf(ownerId)
+            || isOperatorOf(ownerId, clubId)
+            || (isCustomerOf(ownerId, clubId)
+                && resource.data.customerId == request.auth.uid);
           allow create: if false; // Cloud Function only
           allow update: if false; // Cloud Function only — immutable when completed
           allow delete: if false;
@@ -165,6 +175,13 @@ service cloud.firestore {
           allow create: if false; // Cloud Function only
           allow update: if false; // immutable
           allow delete: if false;
+        }
+
+        // ── Idempotency Log ─────────────────────────────────────────────────
+        // Written and read exclusively by Cloud Functions via Admin SDK.
+
+        match /_idempotency/{operationId} {
+          allow read, write: if false;
         }
       }
     }
