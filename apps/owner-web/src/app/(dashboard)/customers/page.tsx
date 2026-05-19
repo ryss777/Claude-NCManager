@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { collection, getDocs, query, where, orderBy } from "firebase/firestore";
 import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
@@ -162,6 +163,7 @@ export default function CustomersPage() {
                     <th className="px-4 py-2 text-left">Membership</th>
                     <th className="px-4 py-2 text-right">Sisa Kunjungan</th>
                     <th className="px-4 py-2 text-left">Kadaluarsa</th>
+                    <th className="px-4 py-2"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -190,6 +192,11 @@ export default function CustomersPage() {
                         </td>
                         <td className="px-4 py-2.5 text-slate-400 text-xs">
                           {mem ? mem.expiresAt.slice(0, 10) : "—"}
+                        </td>
+                        <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+                          <Link href={`/customers/${c.id}`} className="text-xs text-blue-600 hover:underline font-medium whitespace-nowrap">
+                            Detail →
+                          </Link>
                         </td>
                       </tr>
                     );
