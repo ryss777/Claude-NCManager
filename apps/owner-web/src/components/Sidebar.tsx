@@ -13,6 +13,7 @@ const NAV = [
   { href: "/inventory", label: "Inventaris", icon: "📦" },
   { href: "/customers", label: "Pelanggan", icon: "🧑‍🤝‍🧑" },
   { href: "/reports", label: "Laporan", icon: "📊" },
+  { href: "/devices", label: "Device", icon: "📱" },
 ];
 
 export function Sidebar() {
