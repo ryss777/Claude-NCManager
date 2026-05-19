@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { initializeAuth, inMemoryPersistence, getAuth, connectAuthEmulator } from "firebase/auth";
 import { getFunctions, httpsCallable, connectFunctionsEmulator } from "firebase/functions";
+import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
 import type { CallableFn } from "@nc-manager/sync-engine";
 
 const firebaseConfig = {
@@ -24,10 +25,17 @@ export function initFirebase(): void {
   const functions = getFunctions(app);
 
   // Sambungkan ke emulator lokal saat development
+  const db = getFirestore(app);
+
   if (__DEV__) {
     connectAuthEmulator(auth, `http://${EMULATOR_HOST}:9099`, { disableWarnings: true });
     connectFunctionsEmulator(functions, EMULATOR_HOST, 5001);
+    connectFirestoreEmulator(db, EMULATOR_HOST, 8080);
   }
+}
+
+export function firebaseDb() {
+  return getFirestore(getApp());
 }
 
 export function firebaseAuth() {

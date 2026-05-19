@@ -1,18 +1,21 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
-  FlatList,
   StyleSheet,
   Alert,
   ScrollView,
+  FlatList,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { collection, getDocs, query, where } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { useAuthStore } from "@/store/auth.store";
 import { useEnqueue } from "@/hooks/useEnqueue";
+import { firebaseDb } from "@/firebase/firebase";
 
 type PaymentMethod = "cash" | "transfer" | "member_balance";
 
@@ -23,52 +26,108 @@ interface CartItem {
   unitPrice: number;
 }
 
+interface Product {
+  id: string;
+  name: string;
+  sku: string;
+  costPerUnit: number;
+}
+
+interface Customer {
+  id: string;
+  displayName: string;
+  phone: string | null;
+}
+
 export default function PosScreen() {
   const { ownerId, clubId, operatorId } = useAuthStore();
   const enqueue = useEnqueue();
 
-  const [customerId, setCustomerId] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  // Data from Firestore
+  const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
+
+  // Cart
   const [cart, setCart] = useState<CartItem[]>([]);
 
-  // Quick-add form
-  const [productId, setProductId] = useState("");
-  const [productName, setProductName] = useState("");
-  const [qty, setQty] = useState("1");
-  const [unitPrice, setUnitPrice] = useState("");
+  // Customer search
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [showCustomerList, setShowCustomerList] = useState(false);
 
-  const total = cart.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
+  // Payment
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  const [amountPaid, setAmountPaid] = useState("");
 
-  function addToCart() {
-    if (!productId || !productName || !unitPrice) {
-      Alert.alert("Error", "Isi ID produk, nama, dan harga");
-      return;
+  const total = cart.reduce((sum, i) => sum + i.qty * i.unitPrice, 0);
+  const paid = parseFloat(amountPaid) || 0;
+  const change = paid - total;
+
+  const filteredCustomers = customerSearch.length >= 2
+    ? customers.filter((c) =>
+        c.displayName.toLowerCase().includes(customerSearch.toLowerCase()) ||
+        (c.phone ?? "").includes(customerSearch)
+      )
+    : [];
+
+  useEffect(() => {
+    if (!ownerId || !clubId) return;
+    loadData();
+  }, [ownerId, clubId]);
+
+  async function loadData() {
+    setLoadingData(true);
+    try {
+      const db = firebaseDb();
+      const base = `owners/${ownerId}/clubs/${clubId}`;
+      const [itemsSnap, custSnap] = await Promise.all([
+        getDocs(query(collection(db, `${base}/inventoryItems`), where("isActive", "==", true))),
+        getDocs(collection(db, `${base}/customers`)),
+      ]);
+      setProducts(itemsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Product)));
+      setCustomers(custSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer)));
+    } catch {
+      // Offline — use empty lists
+    } finally {
+      setLoadingData(false);
     }
-    const price = parseFloat(unitPrice);
-    const quantity = parseInt(qty, 10);
-    if (isNaN(price) || isNaN(quantity) || quantity < 1) {
-      Alert.alert("Error", "Harga dan jumlah tidak valid");
-      return;
-    }
-
-    setCart((c) => {
-      const existing = c.findIndex((i) => i.productId === productId);
-      if (existing >= 0) {
-        return c.map((item, i) =>
-          i === existing ? { ...item, qty: item.qty + quantity } : item
-        );
-      }
-      return [...c, { productId, productName, qty: quantity, unitPrice: price }];
-    });
-
-    setProductId("");
-    setProductName("");
-    setQty("1");
-    setUnitPrice("");
   }
 
-  function removeFromCart(productId: string) {
-    setCart((c) => c.filter((i) => i.productId !== productId));
+  function addProduct(p: Product) {
+    setCart((c) => {
+      const idx = c.findIndex((i) => i.productId === p.id);
+      if (idx >= 0) {
+        return c.map((item, i) => i === idx ? { ...item, qty: item.qty + 1 } : item);
+      }
+      return [...c, { productId: p.id, productName: p.name, qty: 1, unitPrice: p.costPerUnit }];
+    });
+  }
+
+  function updateQty(productId: string, delta: number) {
+    setCart((c) =>
+      c
+        .map((i) => i.productId === productId ? { ...i, qty: i.qty + delta } : i)
+        .filter((i) => i.qty > 0)
+    );
+  }
+
+  function updatePrice(productId: string, price: string) {
+    const n = parseFloat(price);
+    if (!isNaN(n) && n >= 0) {
+      setCart((c) => c.map((i) => i.productId === productId ? { ...i, unitPrice: n } : i));
+    }
+  }
+
+  function selectCustomer(c: Customer) {
+    setSelectedCustomer(c);
+    setCustomerSearch(c.displayName);
+    setShowCustomerList(false);
+  }
+
+  function clearCustomer() {
+    setSelectedCustomer(null);
+    setCustomerSearch("");
   }
 
   async function submitTransaction() {
@@ -76,10 +135,11 @@ export default function PosScreen() {
       Alert.alert("Error", "Keranjang kosong");
       return;
     }
-    if (!ownerId || !clubId || !operatorId) {
-      Alert.alert("Error", "Sesi tidak valid, silakan login ulang");
+    if (paymentMethod === "cash" && paid < total) {
+      Alert.alert("Error", "Jumlah bayar kurang dari total");
       return;
     }
+    if (!ownerId || !clubId || !operatorId) return;
 
     const transactionId = uuidv4();
     const operationId = uuidv4();
@@ -90,30 +150,38 @@ export default function PosScreen() {
       requestId,
       functionName: "pos_completeTransaction",
       payload: {
-        ownerId,
-        clubId,
-        operatorId,
-        requestId,
-        operationId,
-        transactionId,
-        customerId: customerId || undefined,
+        ownerId, clubId, operatorId, requestId, operationId, transactionId,
+        customerId: selectedCustomer?.id ?? undefined,
         paymentMethod,
-        items: cart.map((item) => ({
-          productId: item.productId,
-          productName: item.productName,
-          qty: item.qty,
-          unitPrice: item.unitPrice,
+        amountPaid: paymentMethod === "cash" ? paid : total,
+        items: cart.map((i) => ({
+          productId: i.productId,
+          productName: i.productName,
+          qty: i.qty,
+          unitPrice: i.unitPrice,
         })),
         totalAmount: total,
-        notes: undefined,
       },
     });
 
-    Alert.alert("Berhasil", `Transaksi Rp ${total.toLocaleString("id-ID")} dijadwalkan`);
+    Alert.alert(
+      "Transaksi Berhasil",
+      paymentMethod === "cash"
+        ? `Total: Rp ${fmt(total)}\nBayar: Rp ${fmt(paid)}\nKembalian: Rp ${fmt(change)}`
+        : `Total: Rp ${fmt(total)}`,
+      [{ text: "OK", onPress: resetForm }]
+    );
+  }
+
+  function resetForm() {
     setCart([]);
-    setCustomerId("");
+    setSelectedCustomer(null);
+    setCustomerSearch("");
+    setAmountPaid("");
     setPaymentMethod("cash");
   }
+
+  const fmt = (n: number) => n.toLocaleString("id-ID");
 
   const paymentOptions: { key: PaymentMethod; label: string }[] = [
     { key: "cash", label: "Tunai" },
@@ -123,98 +191,153 @@ export default function PosScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Kasir</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Kasir</Text>
+        {loadingData && <ActivityIndicator size="small" color="#94a3b8" />}
+      </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-        {/* Add item */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Tambah Produk</Text>
-          <TextInput style={styles.input} placeholder="ID Produk" value={productId} onChangeText={setProductId} />
-          <TextInput style={styles.input} placeholder="Nama Produk" value={productName} onChangeText={setProductName} />
-          <View style={styles.row}>
-            <TextInput
-              style={[styles.input, styles.flex1]}
-              placeholder="Jumlah"
-              value={qty}
-              onChangeText={setQty}
-              keyboardType="numeric"
-            />
-            <TextInput
-              style={[styles.input, styles.flex2]}
-              placeholder="Harga Satuan"
-              value={unitPrice}
-              onChangeText={setUnitPrice}
-              keyboardType="numeric"
-            />
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+
+        {/* Product grid */}
+        {products.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Produk</Text>
+            <View style={styles.productGrid}>
+              {products.map((p) => (
+                <TouchableOpacity key={p.id} style={styles.productCard} onPress={() => addProduct(p)}>
+                  <Text style={styles.productName} numberOfLines={2}>{p.name}</Text>
+                  <Text style={styles.productPrice}>Rp {fmt(p.costPerUnit)}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
-          <TouchableOpacity style={styles.addBtn} onPress={addToCart}>
-            <Text style={styles.addBtnText}>+ Tambah ke Keranjang</Text>
-          </TouchableOpacity>
-        </View>
+        )}
 
         {/* Cart */}
         {cart.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Keranjang</Text>
             {cart.map((item) => (
-              <View key={item.productId} style={styles.cartItem}>
-                <View style={styles.flex1}>
-                  <Text style={styles.cartItemName}>{item.productName}</Text>
-                  <Text style={styles.cartItemMeta}>
-                    {item.qty} × Rp {item.unitPrice.toLocaleString("id-ID")}
-                  </Text>
+              <View key={item.productId} style={styles.cartRow}>
+                <View style={styles.cartInfo}>
+                  <Text style={styles.cartName}>{item.productName}</Text>
+                  <View style={styles.cartPriceRow}>
+                    <Text style={styles.cartMeta}>Harga: Rp </Text>
+                    <TextInput
+                      style={styles.priceInput}
+                      value={item.unitPrice.toString()}
+                      onChangeText={(v) => updatePrice(item.productId, v)}
+                      keyboardType="numeric"
+                    />
+                  </View>
                 </View>
-                <Text style={styles.cartItemTotal}>
-                  Rp {(item.qty * item.unitPrice).toLocaleString("id-ID")}
-                </Text>
-                <TouchableOpacity onPress={() => removeFromCart(item.productId)} style={styles.removeBtn}>
-                  <Text style={styles.removeBtnText}>✕</Text>
-                </TouchableOpacity>
+                <View style={styles.qtyControl}>
+                  <TouchableOpacity style={styles.qtyBtn} onPress={() => updateQty(item.productId, -1)}>
+                    <Text style={styles.qtyBtnText}>−</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.qtyText}>{item.qty}</Text>
+                  <TouchableOpacity style={styles.qtyBtn} onPress={() => updateQty(item.productId, 1)}>
+                    <Text style={styles.qtyBtnText}>+</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.cartTotal}>Rp {fmt(item.qty * item.unitPrice)}</Text>
               </View>
             ))}
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total</Text>
-              <Text style={styles.totalAmount}>Rp {total.toLocaleString("id-ID")}</Text>
+              <Text style={styles.totalAmount}>Rp {fmt(total)}</Text>
             </View>
           </View>
         )}
 
-        {/* Customer + Payment */}
+        {/* Customer */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Customer (opsional)</Text>
+          {selectedCustomer ? (
+            <View style={styles.selectedCustomer}>
+              <View>
+                <Text style={styles.customerName}>{selectedCustomer.displayName}</Text>
+                {selectedCustomer.phone && (
+                  <Text style={styles.customerPhone}>{selectedCustomer.phone}</Text>
+                )}
+              </View>
+              <TouchableOpacity onPress={clearCustomer}>
+                <Text style={styles.clearBtn}>Ganti</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View>
+              <TextInput
+                style={styles.input}
+                placeholder="Cari nama / no. HP (min 2 karakter)"
+                value={customerSearch}
+                onChangeText={(v) => { setCustomerSearch(v); setShowCustomerList(true); }}
+              />
+              {showCustomerList && filteredCustomers.length > 0 && (
+                <View style={styles.dropdown}>
+                  {filteredCustomers.slice(0, 5).map((c) => (
+                    <TouchableOpacity key={c.id} style={styles.dropdownItem} onPress={() => selectCustomer(c)}>
+                      <Text style={styles.dropdownName}>{c.displayName}</Text>
+                      {c.phone && <Text style={styles.dropdownPhone}>{c.phone}</Text>}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* Payment */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Pembayaran</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="ID Customer (opsional)"
-            value={customerId}
-            onChangeText={setCustomerId}
-            autoCapitalize="none"
-          />
-          <View style={styles.row}>
+          <View style={styles.paymentRow}>
             {paymentOptions.map((opt) => (
               <TouchableOpacity
                 key={opt.key}
                 style={[styles.paymentBtn, paymentMethod === opt.key && styles.paymentBtnActive]}
                 onPress={() => setPaymentMethod(opt.key)}
               >
-                <Text
-                  style={[styles.paymentBtnText, paymentMethod === opt.key && styles.paymentBtnTextActive]}
-                >
+                <Text style={[styles.paymentBtnText, paymentMethod === opt.key && styles.paymentBtnTextActive]}>
                   {opt.label}
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
+
+          {paymentMethod === "cash" && (
+            <View style={styles.cashSection}>
+              <TextInput
+                style={styles.input}
+                placeholder="Jumlah Bayar"
+                value={amountPaid}
+                onChangeText={setAmountPaid}
+                keyboardType="numeric"
+              />
+              {paid > 0 && (
+                <View style={[styles.changeRow, change < 0 && styles.changeRowInsufficient]}>
+                  <Text style={styles.changeLabel}>
+                    {change >= 0 ? "Kembalian" : "Kurang"}
+                  </Text>
+                  <Text style={[styles.changeAmount, change < 0 && styles.changeInsufficient]}>
+                    Rp {fmt(Math.abs(change))}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
         </View>
 
         <TouchableOpacity
-          style={[styles.submitBtn, cart.length === 0 && styles.submitBtnDisabled]}
+          style={[styles.submitBtn, (cart.length === 0 || (paymentMethod === "cash" && paid < total && paid > 0)) && styles.submitBtnDisabled]}
           onPress={submitTransaction}
           disabled={cart.length === 0}
         >
           <Text style={styles.submitBtnText}>
-            Bayar Rp {total.toLocaleString("id-ID")}
+            Bayar Rp {fmt(total)}
           </Text>
         </TouchableOpacity>
+
+        <View style={{ height: 24 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -222,73 +345,50 @@ export default function PosScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f8fafc" },
-  title: { fontSize: 22, fontWeight: "700", color: "#1e293b", padding: 16, paddingBottom: 8 },
-  scroll: { padding: 16, paddingTop: 0, gap: 16 },
-  section: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 16,
-    gap: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  sectionTitle: { fontSize: 15, fontWeight: "600", color: "#374151", marginBottom: 4 },
-  input: {
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: "#1e293b",
-    backgroundColor: "#f8fafc",
-  },
-  row: { flexDirection: "row", gap: 8 },
-  flex1: { flex: 1 },
-  flex2: { flex: 2 },
-  addBtn: {
-    backgroundColor: "#eff6ff",
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
-  },
-  addBtnText: { color: "#2563eb", fontWeight: "600", fontSize: 15 },
-  cartItem: { flexDirection: "row", alignItems: "center", gap: 8 },
-  cartItemName: { fontSize: 14, fontWeight: "600", color: "#1e293b" },
-  cartItemMeta: { fontSize: 12, color: "#64748b" },
-  cartItemTotal: { fontSize: 14, fontWeight: "600", color: "#1e293b", marginRight: 4 },
-  removeBtn: { padding: 4 },
-  removeBtnText: { color: "#dc2626", fontSize: 16, fontWeight: "700" },
-  totalRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#e2e8f0",
-  },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 },
+  title: { fontSize: 22, fontWeight: "700", color: "#1e293b" },
+  scroll: { padding: 16, paddingTop: 8, gap: 12 },
+  section: { backgroundColor: "#fff", borderRadius: 12, padding: 14, gap: 10, elevation: 2, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 4 },
+  sectionTitle: { fontSize: 13, fontWeight: "600", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 },
+  productGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  productCard: { width: "30%", backgroundColor: "#f8fafc", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#e2e8f0", alignItems: "center" },
+  productName: { fontSize: 12, fontWeight: "600", color: "#1e293b", textAlign: "center", marginBottom: 4 },
+  productPrice: { fontSize: 11, color: "#2563eb", fontWeight: "700" },
+  cartRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
+  cartInfo: { flex: 1 },
+  cartName: { fontSize: 14, fontWeight: "600", color: "#1e293b" },
+  cartPriceRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
+  cartMeta: { fontSize: 12, color: "#64748b" },
+  priceInput: { fontSize: 12, color: "#1e293b", borderBottomWidth: 1, borderBottomColor: "#e2e8f0", paddingVertical: 0, minWidth: 60 },
+  qtyControl: { flexDirection: "row", alignItems: "center", gap: 8 },
+  qtyBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#f1f5f9", alignItems: "center", justifyContent: "center" },
+  qtyBtnText: { fontSize: 18, color: "#475569", lineHeight: 22 },
+  qtyText: { fontSize: 15, fontWeight: "700", color: "#1e293b", minWidth: 20, textAlign: "center" },
+  cartTotal: { fontSize: 13, fontWeight: "700", color: "#1e293b", minWidth: 70, textAlign: "right" },
+  totalRow: { flexDirection: "row", justifyContent: "space-between", paddingTop: 8, borderTopWidth: 1, borderTopColor: "#e2e8f0" },
   totalLabel: { fontSize: 16, fontWeight: "700", color: "#374151" },
   totalAmount: { fontSize: 16, fontWeight: "700", color: "#2563eb" },
-  paymentBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    alignItems: "center",
-  },
+  input: { borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: "#1e293b", backgroundColor: "#f8fafc" },
+  selectedCustomer: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: "#f0fdf4", borderRadius: 8, padding: 12 },
+  customerName: { fontSize: 14, fontWeight: "600", color: "#166534" },
+  customerPhone: { fontSize: 12, color: "#4ade80" },
+  clearBtn: { fontSize: 13, color: "#2563eb", fontWeight: "600" },
+  dropdown: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#e2e8f0", borderRadius: 8, marginTop: 4, overflow: "hidden" },
+  dropdownItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#f1f5f9" },
+  dropdownName: { fontSize: 14, color: "#1e293b", fontWeight: "500" },
+  dropdownPhone: { fontSize: 12, color: "#94a3b8", marginTop: 1 },
+  paymentRow: { flexDirection: "row", gap: 8 },
+  paymentBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: "#e2e8f0", alignItems: "center" },
   paymentBtnActive: { borderColor: "#2563eb", backgroundColor: "#eff6ff" },
   paymentBtnText: { fontSize: 14, color: "#64748b", fontWeight: "500" },
   paymentBtnTextActive: { color: "#2563eb", fontWeight: "700" },
-  submitBtn: {
-    backgroundColor: "#2563eb",
-    borderRadius: 12,
-    paddingVertical: 18,
-    alignItems: "center",
-  },
+  cashSection: { gap: 8 },
+  changeRow: { flexDirection: "row", justifyContent: "space-between", backgroundColor: "#f0fdf4", borderRadius: 8, padding: 12 },
+  changeRowInsufficient: { backgroundColor: "#fff1f2" },
+  changeLabel: { fontSize: 14, fontWeight: "600", color: "#166534" },
+  changeAmount: { fontSize: 16, fontWeight: "700", color: "#16a34a" },
+  changeInsufficient: { color: "#dc2626" },
+  submitBtn: { backgroundColor: "#2563eb", borderRadius: 12, paddingVertical: 18, alignItems: "center" },
   submitBtnDisabled: { opacity: 0.4 },
   submitBtnText: { color: "#fff", fontSize: 18, fontWeight: "700" },
 });
