@@ -108,7 +108,7 @@ export default function OwnerPosPage() {
       const db = firebaseDb();
       const base = `owners/${ownerId}/clubs/${clubId}`;
       const [prodSnap, custSnap] = await Promise.all([
-        getDocs(query(collection(db, `${base}/products`), where("isActive", "==", true))),
+        getDocs(query(collection(db, `${base}/inventoryItems`), where("isActive", "==", true))),
         getDocs(collection(db, `${base}/customers`)),
       ]);
       setProducts(prodSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Product)));
@@ -246,7 +246,7 @@ export default function OwnerPosPage() {
         {filteredProducts.length === 0 ? (
           <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
             {products.length === 0
-              ? "Belum ada produk. Tambahkan produk di halaman Produk."
+              ? "Belum ada item. Tambahkan di halaman Inventaris."
               : "Tidak ada produk yang cocok."}
           </div>
         ) : (

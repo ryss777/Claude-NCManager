@@ -115,7 +115,7 @@ export default function PosScreen() {
       const db = firebaseDb();
       const base = `owners/${ownerId}/clubs/${clubId}`;
       const [itemsSnap, custSnap] = await Promise.all([
-        getDocs(query(collection(db, `${base}/products`), where("isActive", "==", true))),
+        getDocs(query(collection(db, `${base}/inventoryItems`), where("isActive", "==", true))),
         getDocs(collection(db, `${base}/customers`)),
       ]);
       setProducts(itemsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Product)));

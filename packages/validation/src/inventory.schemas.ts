@@ -28,10 +28,12 @@ export const createInventoryMovementSchema = tenantRefSchema
 
 export const createInventoryItemSchema = tenantRefSchema.extend({
   name: z.string().min(1).max(100),
-  sku: z.string().min(1).max(50),
+  sku: z.string().max(50).optional(),
   unit: z.string().min(1).max(20),
+  category: z.string().max(50).optional(),
+  sellingPrice: z.number().min(0),
+  costPerUnit: z.number().min(0).optional(),
   minimumStock: z.number().min(0),
-  costPerUnit: z.number().min(0),
 });
 
 export type CreateInventoryMovementInput = z.infer<
