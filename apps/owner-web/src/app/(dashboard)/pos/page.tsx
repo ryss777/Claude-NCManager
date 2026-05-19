@@ -40,7 +40,7 @@ const fmtIdr = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 
-const CATEGORIES = ["Semua", "Minuman", "Makanan", "Suplemen", "Merchandise", "Lainnya"];
+const CATEGORIES = ["Semua", "Inner Nutrition", "Outer Nutrition", "Accessories"];
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

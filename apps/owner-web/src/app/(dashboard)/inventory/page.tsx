@@ -19,7 +19,7 @@ interface InventoryItem {
   isActive: boolean;
 }
 
-const CATEGORIES = ["Minuman", "Makanan", "Suplemen", "Merchandise", "Lainnya"];
+const CATEGORIES = ["Inner Nutrition", "Outer Nutrition", "Accessories"];
 
 export default function InventoryPage() {
   const { ownerId, clubId } = useOwnerAuthStore();
