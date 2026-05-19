@@ -181,7 +181,7 @@ export default function PosScreen() {
     setPaymentMethod("cash");
   }
 
-  const fmt = (n: number) => n.toLocaleString("id-ID");
+  const fmt = (n: number | undefined | null) => (n ?? 0).toLocaleString("id-ID");
 
   const paymentOptions: { key: PaymentMethod; label: string }[] = [
     { key: "cash", label: "Tunai" },

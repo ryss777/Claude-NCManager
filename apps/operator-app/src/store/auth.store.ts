@@ -6,11 +6,13 @@ interface AuthState {
   ownerId: string | undefined;
   clubId: string | undefined;
   customToken: string | undefined;
+  deviceId: string | undefined;
   setAuth: (params: {
     operatorId: string;
     ownerId: string;
     clubId: string;
     customToken: string;
+    deviceId: string;
   }) => void;
   clearAuth: () => void;
 }
@@ -21,8 +23,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   ownerId: undefined,
   clubId: undefined,
   customToken: undefined,
-  setAuth: ({ operatorId, ownerId, clubId, customToken }) =>
-    set({ isAuthenticated: true, operatorId, ownerId, clubId, customToken }),
+  deviceId: undefined,
+  setAuth: ({ operatorId, ownerId, clubId, customToken, deviceId }) =>
+    set({ isAuthenticated: true, operatorId, ownerId, clubId, customToken, deviceId }),
   clearAuth: () =>
     set({
       isAuthenticated: false,
@@ -30,5 +33,6 @@ export const useAuthStore = create<AuthState>((set) => ({
       ownerId: undefined,
       clubId: undefined,
       customToken: undefined,
+      deviceId: undefined,
     }),
 }));

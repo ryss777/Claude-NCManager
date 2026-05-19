@@ -48,6 +48,7 @@ export function useOperatorLogin() {
         ownerId: params.ownerId,
         clubId: params.clubId,
         customToken,
+        deviceId: params.deviceId,
       });
 
       return { success: true };
@@ -72,6 +73,7 @@ export async function restoreSession(): Promise<boolean> {
       ownerId: string;
       clubId: string;
       customToken: string;
+      deviceId: string;
     };
 
     await signInWithCustomToken(firebaseAuth(), session.customToken);
@@ -81,6 +83,7 @@ export async function restoreSession(): Promise<boolean> {
       ownerId: session.ownerId,
       clubId: session.clubId,
       customToken: session.customToken,
+      deviceId: session.deviceId,
     });
 
     return true;
