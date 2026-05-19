@@ -31,7 +31,8 @@ export const membership_createPlan = onCall(async (request) => {
     tier: payload.tier,
     price: payload.price,
     visitQuota: payload.visitQuota,
-    durationDays: payload.durationDays,
+    hasExpiry: payload.hasExpiry,
+    durationDays: payload.hasExpiry ? (payload.durationDays ?? null) : null,
     benefits: payload.benefits,
     isActive: true,
     createdAt: now,
@@ -85,8 +86,11 @@ export const membership_activate = onCall(async (request) => {
 
   const now = new Date().toISOString();
   const activatedAt = now;
-  const durationDays = plan["durationDays"] as number;
-  const expiresAt = new Date(Date.now() + durationDays * 86_400_000).toISOString();
+  const hasExpiry = (plan["hasExpiry"] as boolean) ?? true;
+  const durationDays = plan["durationDays"] as number | null;
+  const expiresAt = hasExpiry && durationDays
+    ? new Date(Date.now() + durationDays * 86_400_000).toISOString()
+    : null;
   const membershipRef = db.collection(COLLECTIONS.MEMBERSHIPS(ownerId, clubId)).doc();
 
   await db.runTransaction(async (tx) => {
@@ -189,9 +193,9 @@ export const membership_deductVisit = onCall(async (request) => {
     throw new HttpsError("resource-exhausted", "No visits remaining");
   }
 
-  // Check expiry
-  const expiresAt = new Date(membership["expiresAt"] as string);
-  if (expiresAt < new Date()) {
+  // Check expiry (null expiresAt means no-expiry plan)
+  const expiresAtRaw = membership["expiresAt"] as string | null;
+  if (expiresAtRaw && new Date(expiresAtRaw) < new Date()) {
     await membershipRef.update({ status: "expired", updatedAt: new Date().toISOString() });
     throw new HttpsError("failed-precondition", "Membership has expired");
   }
@@ -266,8 +270,11 @@ export const membership_upgrade = onCall(async (request) => {
   const now = new Date().toISOString();
   const remainingVisits = current["visitRemaining"] as number;
   const newVisitQuota = newPlan["visitQuota"] as number;
-  const durationDays = newPlan["durationDays"] as number;
-  const expiresAt = new Date(Date.now() + durationDays * 86_400_000).toISOString();
+  const newHasExpiry = (newPlan["hasExpiry"] as boolean) ?? true;
+  const newDurationDays = newPlan["durationDays"] as number | null;
+  const expiresAt = newHasExpiry && newDurationDays
+    ? new Date(Date.now() + newDurationDays * 86_400_000).toISOString()
+    : null;
   const newMembershipRef = db.collection(COLLECTIONS.MEMBERSHIPS(ownerId, clubId)).doc();
 
   await db.runTransaction(async (tx) => {

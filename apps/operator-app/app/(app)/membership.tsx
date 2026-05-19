@@ -29,7 +29,8 @@ interface Plan {
   tier: string;
   price: number;
   visitQuota: number;
-  durationDays: number;
+  hasExpiry: boolean;
+  durationDays: number | null;
   benefits: string[];
 }
 
@@ -41,7 +42,7 @@ interface Membership {
   visitRemaining: number;
   visitUsed: number;
   visitQuota: number;
-  expiresAt: string;
+  expiresAt: string | null;
   activatedAt: string;
 }
 
@@ -56,7 +57,8 @@ function fmt(n: number) {
   return n.toLocaleString("id-ID");
 }
 
-function daysLeft(expiresAt: string) {
+function daysLeft(expiresAt: string | null): number | null {
+  if (!expiresAt) return null;
   const diff = new Date(expiresAt).getTime() - Date.now();
   return Math.max(0, Math.ceil(diff / 86_400_000));
 }
@@ -224,10 +226,10 @@ export default function MembershipScreen() {
                 customerId: selectedCustomer.id,
                 planId: selectedPlan.id,
                 transactionId: uuidv4(),
-              }) as { membershipId: string; expiresAt: string };
+              }) as { membershipId: string; expiresAt: string | null };
 
-              const expires = result.expiresAt.slice(0, 10);
-              Alert.alert("Berhasil!", `Membership aktif s/d ${expires}`);
+              const expires = result.expiresAt ? result.expiresAt.slice(0, 10) : "Tidak ada expired";
+              Alert.alert("Berhasil!", `Membership aktif${result.expiresAt ? ` s/d ${expires}` : ` — ${expires}`}`);
               loadActiveMembership(selectedCustomer.id);
               setSelectedPlan(null);
             } catch (err) {
@@ -338,15 +340,21 @@ export default function MembershipScreen() {
                   </View>
 
                   <View style={styles.membershipMeta}>
-                    <Text style={styles.metaText}>
-                      Berlaku s/d {membership.expiresAt.slice(0, 10)}
-                    </Text>
-                    <Text style={[
-                      styles.daysLeft,
-                      daysLeft(membership.expiresAt) <= 7 && styles.daysLeftWarning,
-                    ]}>
-                      {daysLeft(membership.expiresAt)} hari lagi
-                    </Text>
+                    {membership.expiresAt ? (
+                      <>
+                        <Text style={styles.metaText}>
+                          Berlaku s/d {membership.expiresAt.slice(0, 10)}
+                        </Text>
+                        <Text style={[
+                          styles.daysLeft,
+                          (daysLeft(membership.expiresAt) ?? 99) <= 7 && styles.daysLeftWarning,
+                        ]}>
+                          {daysLeft(membership.expiresAt)} hari lagi
+                        </Text>
+                      </>
+                    ) : (
+                      <Text style={styles.noExpiry}>∞ Tidak ada expired</Text>
+                    )}
                   </View>
                 </View>
 
@@ -402,7 +410,8 @@ export default function MembershipScreen() {
                       <Text style={styles.planName} numberOfLines={2}>{plan.name}</Text>
                       <Text style={styles.planPrice}>Rp {fmt(plan.price)}</Text>
                       <Text style={styles.planMeta}>
-                        {plan.visitQuota}x · {plan.durationDays} hari
+                        {plan.visitQuota}x
+                        {plan.hasExpiry && plan.durationDays ? ` · ${plan.durationDays} hari` : " · ∞"}
                       </Text>
                       {isSelected && (
                         <View style={styles.selectedMark}>
@@ -531,6 +540,7 @@ const styles = StyleSheet.create({
   metaText: { fontSize: 12, color: "#64748b" },
   daysLeft: { fontSize: 12, fontWeight: "600", color: "#16a34a" },
   daysLeftWarning: { color: "#dc2626" },
+  noExpiry: { fontSize: 12, fontWeight: "600", color: "#16a34a" },
 
   checkInBtn: {
     backgroundColor: "#16a34a", borderRadius: 10, paddingVertical: 14, alignItems: "center",

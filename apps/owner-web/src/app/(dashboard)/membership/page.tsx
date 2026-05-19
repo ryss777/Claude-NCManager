@@ -22,7 +22,8 @@ interface Plan {
   tier: Tier;
   price: number;
   visitQuota: number;
-  durationDays: number;
+  hasExpiry: boolean;
+  durationDays: number | null;
   benefits: string[];
   isActive: boolean;
 }
@@ -40,6 +41,7 @@ export default function MembershipPage() {
   const [tier, setTier] = useState<Tier>("silver");
   const [price, setPrice] = useState("");
   const [visitQuota, setVisitQuota] = useState("");
+  const [hasExpiry, setHasExpiry] = useState(true);
   const [durationDays, setDurationDays] = useState("");
   const [benefits, setBenefits] = useState("");
   const [loading, setLoading] = useState(false);
@@ -51,6 +53,7 @@ export default function MembershipPage() {
   const [editTier, setEditTier] = useState<Tier>("silver");
   const [editPrice, setEditPrice] = useState("");
   const [editVisitQuota, setEditVisitQuota] = useState("");
+  const [editHasExpiry, setEditHasExpiry] = useState(true);
   const [editDurationDays, setEditDurationDays] = useState("");
   const [editBenefits, setEditBenefits] = useState("");
   const [editSaving, setEditSaving] = useState(false);
@@ -73,8 +76,12 @@ export default function MembershipPage() {
   useEffect(() => { loadPlans(); }, [ownerId, clubId]);
 
   async function handleCreate() {
-    if (!name || !price || !visitQuota || !durationDays) {
-      setFeedback({ type: "err", msg: "Nama, harga, kuota, dan durasi wajib diisi" });
+    if (!name || !price || !visitQuota) {
+      setFeedback({ type: "err", msg: "Nama, harga, dan kuota wajib diisi" });
+      return;
+    }
+    if (hasExpiry && !durationDays) {
+      setFeedback({ type: "err", msg: "Durasi wajib diisi jika expired aktif" });
       return;
     }
     setLoading(true);
@@ -84,11 +91,12 @@ export default function MembershipPage() {
         ownerId, clubId, name, tier,
         price: parseFloat(price),
         visitQuota: parseInt(visitQuota, 10),
-        durationDays: parseInt(durationDays, 10),
+        hasExpiry,
+        durationDays: hasExpiry ? parseInt(durationDays, 10) : undefined,
         benefits: benefits.split("\n").map((s) => s.trim()).filter(Boolean),
       });
       setFeedback({ type: "ok", msg: `Paket "${name}" berhasil dibuat` });
-      setName(""); setPrice(""); setVisitQuota(""); setDurationDays(""); setBenefits("");
+      setName(""); setPrice(""); setVisitQuota(""); setHasExpiry(true); setDurationDays(""); setBenefits("");
       loadPlans();
     } catch (err) {
       setFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
@@ -101,12 +109,14 @@ export default function MembershipPage() {
     setEditTier(p.tier);
     setEditPrice(p.price.toString());
     setEditVisitQuota(p.visitQuota.toString());
-    setEditDurationDays(p.durationDays.toString());
+    setEditHasExpiry(p.hasExpiry ?? true);
+    setEditDurationDays(p.durationDays?.toString() ?? "");
     setEditBenefits((p.benefits ?? []).join("\n"));
   }
 
   async function saveEdit() {
-    if (!editId || !editName || !editPrice || !editVisitQuota || !editDurationDays) return;
+    if (!editId || !editName || !editPrice || !editVisitQuota) return;
+    if (editHasExpiry && !editDurationDays) return;
     setEditSaving(true);
     try {
       await updateDoc(doc(firebaseDb(), planPath(editId)), {
@@ -114,7 +124,8 @@ export default function MembershipPage() {
         tier: editTier,
         price: parseFloat(editPrice),
         visitQuota: parseInt(editVisitQuota, 10),
-        durationDays: parseInt(editDurationDays, 10),
+        hasExpiry: editHasExpiry,
+        durationDays: editHasExpiry ? parseInt(editDurationDays, 10) : null,
         benefits: editBenefits.split("\n").map((s) => s.trim()).filter(Boolean),
         updatedAt: new Date().toISOString(),
       });
@@ -199,22 +210,31 @@ export default function MembershipPage() {
                               placeholder="Harga"
                             />
                           </div>
-                          <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number"
+                            className="border border-blue-300 rounded px-2 py-1 text-xs w-full"
+                            value={editVisitQuota}
+                            onChange={(e) => setEditVisitQuota(e.target.value)}
+                            placeholder="Kuota kunjungan"
+                          />
+                          <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
                             <input
-                              type="number"
-                              className="border border-blue-300 rounded px-2 py-1 text-xs"
-                              value={editVisitQuota}
-                              onChange={(e) => setEditVisitQuota(e.target.value)}
-                              placeholder="Kuota kunjungan"
+                              type="checkbox"
+                              checked={editHasExpiry}
+                              onChange={(e) => setEditHasExpiry(e.target.checked)}
+                              className="rounded"
                             />
+                            Ada tanggal kadaluarsa
+                          </label>
+                          {editHasExpiry && (
                             <input
                               type="number"
-                              className="border border-blue-300 rounded px-2 py-1 text-xs"
+                              className="border border-blue-300 rounded px-2 py-1 text-xs w-full"
                               value={editDurationDays}
                               onChange={(e) => setEditDurationDays(e.target.value)}
                               placeholder="Durasi (hari)"
                             />
-                          </div>
+                          )}
                           <textarea
                             rows={2}
                             className="w-full border border-blue-300 rounded px-2 py-1 text-xs resize-none"
@@ -249,7 +269,13 @@ export default function MembershipPage() {
                           <h4 className="font-semibold text-slate-800 mb-1">{p.name}</h4>
                           <p className="text-xl font-bold text-slate-900 mb-3">{fmt(p.price)}</p>
                           <div className="text-xs text-slate-500 space-y-1 mb-4">
-                            <p>{p.visitQuota} kunjungan · {p.durationDays} hari</p>
+                            <p>
+                              {p.visitQuota} kunjungan
+                              {" · "}
+                              {p.hasExpiry && p.durationDays
+                                ? `${p.durationDays} hari`
+                                : <span className="text-green-600 font-medium">Tidak ada expired</span>}
+                            </p>
                             {p.benefits?.length > 0 && (
                               <ul className="mt-2 space-y-0.5">
                                 {p.benefits.map((b, i) => <li key={i}>• {b}</li>)}
@@ -301,7 +327,9 @@ export default function MembershipPage() {
                         <h4 className="font-semibold text-slate-700 mb-1">{p.name}</h4>
                         <p className="text-lg font-bold text-slate-600 mb-3">{fmt(p.price)}</p>
                         <p className="text-xs text-slate-400 mb-4">
-                          {p.visitQuota} kunjungan · {p.durationDays} hari
+                          {p.visitQuota} kunjungan
+                          {" · "}
+                          {p.hasExpiry && p.durationDays ? `${p.durationDays} hari` : "Tidak ada expired"}
                         </p>
                         <div className="flex gap-2 border-t border-slate-100 pt-3">
                           <button
@@ -363,26 +391,38 @@ export default function MembershipPage() {
                   />
                 </label>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block">
-                  <span className="text-xs text-slate-500">Kuota Kunjungan</span>
-                  <input
-                    type="number"
-                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                    value={visitQuota}
-                    onChange={(e) => setVisitQuota(e.target.value)}
-                  />
-                </label>
+              <label className="block">
+                <span className="text-xs text-slate-500">Kuota Kunjungan</span>
+                <input
+                  type="number"
+                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                  value={visitQuota}
+                  onChange={(e) => setVisitQuota(e.target.value)}
+                />
+              </label>
+
+              <label className="flex items-center gap-3 py-1 cursor-pointer select-none">
+                <div
+                  onClick={() => setHasExpiry(!hasExpiry)}
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${hasExpiry ? "bg-purple-600" : "bg-slate-200"}`}
+                >
+                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${hasExpiry ? "translate-x-4" : "translate-x-1"}`} />
+                </div>
+                <span className="text-sm text-slate-700">Ada tanggal kadaluarsa</span>
+              </label>
+
+              {hasExpiry && (
                 <label className="block">
                   <span className="text-xs text-slate-500">Durasi (hari)</span>
                   <input
                     type="number"
                     className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Contoh: 30"
                     value={durationDays}
                     onChange={(e) => setDurationDays(e.target.value)}
                   />
                 </label>
-              </div>
+              )}
               <label className="block">
                 <span className="text-xs text-slate-500">Benefit (satu per baris, opsional)</span>
                 <textarea

@@ -1,14 +1,20 @@
 import { z } from "zod";
 import { idempotencySchema, tenantRefSchema } from "./common.schemas";
 
-export const createMembershipPlanSchema = tenantRefSchema.extend({
-  name: z.string().min(1).max(100),
-  tier: z.enum(["basic", "silver", "gold", "platinum"]),
-  price: z.number().min(0),
-  visitQuota: z.number().int().min(1),
-  durationDays: z.number().int().min(1).max(365),
-  benefits: z.array(z.string()).max(10),
-});
+export const createMembershipPlanSchema = tenantRefSchema
+  .extend({
+    name: z.string().min(1).max(100),
+    tier: z.enum(["basic", "silver", "gold", "platinum"]),
+    price: z.number().min(0),
+    visitQuota: z.number().int().min(1),
+    hasExpiry: z.boolean().default(true),
+    durationDays: z.number().int().min(1).max(3650).optional(),
+    benefits: z.array(z.string()).max(10),
+  })
+  .refine(
+    (d) => !d.hasExpiry || (d.durationDays !== undefined && d.durationDays >= 1),
+    { message: "durationDays wajib diisi jika hasExpiry aktif", path: ["durationDays"] }
+  );
 
 export const activateMembershipSchema = tenantRefSchema
   .merge(idempotencySchema)
