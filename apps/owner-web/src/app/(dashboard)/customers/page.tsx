@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { collection, getDocs, query, where, orderBy } from "firebase/firestore";
+import { collection, getDocs, query, where, orderBy, doc, updateDoc } from "firebase/firestore";
 import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
 import { v4 as uuidv4 } from "uuid";
@@ -59,6 +59,11 @@ export default function CustomersPage() {
   const [activateLoading, setActivateLoading] = useState(false);
   const [activateFeedback, setActivateFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
+  // Change tier
+  const [changeTier, setChangeTier] = useState<CustomerTier>("retail");
+  const [tierLoading, setTierLoading] = useState(false);
+  const [tierFeedback, setTierFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
+
   async function loadData() {
     if (!ownerId || !clubId) return;
     setLoadingList(true);
@@ -107,6 +112,22 @@ export default function CustomersPage() {
     } catch (err) {
       setCreateFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
     } finally { setCreateLoading(false); }
+  }
+
+  async function handleChangeTier() {
+    if (!selected || !ownerId || !clubId) return;
+    setTierLoading(true);
+    setTierFeedback(undefined);
+    try {
+      await updateDoc(
+        doc(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/customers/${selected.id}`),
+        { tier: changeTier, updatedAt: new Date().toISOString() }
+      );
+      setTierFeedback({ type: "ok", msg: `Tier diubah ke ${TIER_LABELS[changeTier]}` });
+      loadData();
+    } catch (err) {
+      setTierFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
+    } finally { setTierLoading(false); }
   }
 
   async function handleActivate() {
@@ -180,7 +201,7 @@ export default function CustomersPage() {
                     return (
                       <tr
                         key={c.id}
-                        onClick={() => { setSelected(isSelected ? null : c); setActivateFeedback(undefined); setActivatePlanId(""); }}
+                        onClick={() => { setSelected(isSelected ? null : c); setActivateFeedback(undefined); setActivatePlanId(""); setTierFeedback(undefined); setChangeTier(c.tier ?? "retail"); }}
                         className={`cursor-pointer hover:bg-slate-50 transition ${isSelected ? "bg-blue-50" : ""}`}
                       >
                         <td className="px-4 py-2.5 font-medium text-slate-800">{c.displayName}</td>
@@ -278,6 +299,39 @@ export default function CustomersPage() {
                   <p className="text-xs text-amber-700">Belum memiliki membership aktif</p>
                 </div>
               )}
+
+              {/* Change tier */}
+              <div className="mb-5">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-sm font-semibold text-slate-700">Level / Tier</h4>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                    {TIER_LABELS[selected.tier] ?? selected.tier}
+                  </span>
+                </div>
+                {tierFeedback && (
+                  <div className={`mb-2 text-xs rounded-lg px-3 py-2 ${tierFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                    {tierFeedback.msg}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <select
+                    className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                    value={changeTier}
+                    onChange={(e) => setChangeTier(e.target.value as CustomerTier)}
+                  >
+                    {(Object.entries(TIER_LABELS) as [CustomerTier, string][]).map(([k, v]) => (
+                      <option key={k} value={k}>{v}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleChangeTier}
+                    disabled={tierLoading || changeTier === selected.tier}
+                    className="bg-slate-700 text-white px-4 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-40 transition"
+                  >
+                    {tierLoading ? "…" : "Ubah"}
+                  </button>
+                </div>
+              </div>
 
               {/* Activate membership */}
               <h4 className="text-sm font-semibold text-slate-700 mb-3">Aktifkan Membership</h4>
