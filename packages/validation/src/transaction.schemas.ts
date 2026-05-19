@@ -52,5 +52,25 @@ export const completeTransactionSchema = z.object({
   operatorId: z.string().min(1),
 });
 
+export const ownerSaleSchema = tenantRefSchema
+  .merge(idempotencySchema)
+  .extend({
+    items: z.array(transactionItemSchema).min(1).max(50),
+    paymentMethod: paymentMethodSchema,
+    amountPaid: z.number().min(0),
+    customerId: z.string().optional(),
+    discount: z.number().min(0).default(0),
+    notes: z.string().max(500).optional(),
+  })
+  .refine(
+    (data) => {
+      const subtotal = data.items.reduce((sum, item) => sum + item.subtotal, 0);
+      const total = subtotal - data.discount;
+      return data.amountPaid >= total;
+    },
+    { message: "amountPaid must be >= total after discount" }
+  );
+
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type ReverseTransactionInput = z.infer<typeof reverseTransactionSchema>;
+export type OwnerSaleInput = z.infer<typeof ownerSaleSchema>;

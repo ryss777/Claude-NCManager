@@ -58,6 +58,7 @@ export default function DashboardHome() {
   ];
 
   const navCards = [
+    { label: "Kasir Owner",  desc: "Jual langsung ke pelanggan",   href: "/pos",         accent: "border-blue-300" },
     { label: "Pelanggan",    desc: "Daftar & kelola member",       href: "/customers",   accent: "border-blue-200" },
     { label: "Paket Member", desc: "Rencana keanggotaan",          href: "/membership",  accent: "border-purple-200" },
     { label: "Produk",       desc: "Katalog & harga jual",         href: "/products",    accent: "border-teal-200" },
@@ -90,7 +91,7 @@ export default function DashboardHome() {
       </div>
 
       {/* Quick nav */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         {navCards.map((c) => (
           <Link
             key={c.href}

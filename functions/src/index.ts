@@ -4,6 +4,7 @@ admin.initializeApp();
 
 // Transaction Engine
 export * from "./transaction/pos.functions";
+export * from "./transaction/owner.pos.functions";
 
 // Inventory Engine
 export * from "./inventory/inventory.functions";
