@@ -12,6 +12,7 @@ const NAV = [
   { href: "/membership", label: "Paket Member", icon: "⭐" },
   { href: "/inventory", label: "Inventaris", icon: "📦" },
   { href: "/customers", label: "Pelanggan", icon: "🧑‍🤝‍🧑" },
+  { href: "/reports", label: "Laporan", icon: "📊" },
 ];
 
 export function Sidebar() {
