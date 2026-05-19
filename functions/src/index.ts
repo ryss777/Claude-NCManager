@@ -17,6 +17,9 @@ export * from "./membership/membership.functions";
 // Auth Engine
 export * from "./auth/auth.functions";
 
+// Customer Engine
+export * from "./customer/customer.functions";
+
 // Sync Engine
 export * from "./sync/sync.functions";
 

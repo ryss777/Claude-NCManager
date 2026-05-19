@@ -44,10 +44,11 @@ export default function DashboardHome() {
   ];
 
   const navCards = [
-    { label: "Keuangan", desc: "Jurnal & laporan shift", href: "/finance" },
-    { label: "Operator", desc: "Kelola akses operator", href: "/operators" },
+    { label: "Pelanggan", desc: "Daftar & kelola member", href: "/customers" },
     { label: "Paket Member", desc: "Rencana keanggotaan", href: "/membership" },
+    { label: "Operator", desc: "Kelola akses operator", href: "/operators" },
     { label: "Inventaris", desc: "Level stok produk", href: "/inventory" },
+    { label: "Keuangan", desc: "Jurnal & laporan shift", href: "/finance" },
   ];
 
   return (
@@ -70,7 +71,7 @@ export default function DashboardHome() {
         ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 max-w-xl">
+      <div className="grid grid-cols-3 gap-4 max-w-2xl">
         {navCards.map((c) => (
           <a
             key={c.href}

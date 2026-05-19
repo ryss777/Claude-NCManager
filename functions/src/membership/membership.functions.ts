@@ -48,10 +48,14 @@ export const membership_createPlan = onCall(async (request) => {
  * Idempotent. Writes journal entry for membership revenue.
  */
 export const membership_activate = onCall(async (request) => {
-  requireRole(request, "operator");
+  requireAuth(request);
+  const role = (request.auth.token as Record<string, unknown>)["role"] as string;
+  if (role !== "operator" && role !== "owner") {
+    throw new HttpsError("permission-denied", "Operator or owner role required");
+  }
 
   const payload = validatePayload(activateMembershipSchema, request.data);
-  const { ownerId, clubId, operationId, customerId, planId, transactionId } = payload;
+  const { ownerId, clubId, operationId, customerId, planId } = payload;
 
   const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
   const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
