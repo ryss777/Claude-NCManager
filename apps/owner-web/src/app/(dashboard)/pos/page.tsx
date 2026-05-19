@@ -8,11 +8,16 @@ import { callFunction, firebaseDb } from "@/firebase/firebase";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+type CustomerTier = "retail" | "ds" | "sc" | "sbQp" | "spv";
+const TIER_LABELS: Record<CustomerTier, string> = { retail: "Retail", ds: "DS", sc: "SC", sbQp: "SB-QP", spv: "SPV" };
+
+interface PriceTiers { retail: number; ds: number; sc: number; sbQp: number; spv: number; }
+
 interface Product {
   id: string;
   name: string;
   category: string;
-  sellingPrice: number;
+  prices: PriceTiers;
 }
 
 interface Customer {
@@ -20,6 +25,7 @@ interface Customer {
   displayName: string;
   phone: string | null;
   email: string | null;
+  tier: CustomerTier;
 }
 
 interface CartItem {
@@ -122,12 +128,15 @@ export default function OwnerPosPage() {
 
   // ── Cart actions ────────────────────────────────────────────────────────────
 
+  const activeTier: CustomerTier = selectedCustomer?.tier ?? "retail";
+
   function addProduct(p: Product) {
+    const unitPrice = p.prices[activeTier] ?? p.prices.retail;
     setCart((prev) => {
       const idx = prev.findIndex((i) => i.productId === p.id);
       if (idx >= 0)
         return prev.map((i, n) => n === idx ? { ...i, qty: i.qty + 1 } : i);
-      return [...prev, { productId: p.id, productName: p.name, qty: 1, unitPrice: p.sellingPrice }];
+      return [...prev, { productId: p.id, productName: p.name, qty: 1, unitPrice }];
     });
   }
 
@@ -270,7 +279,10 @@ export default function OwnerPosPage() {
                   )}
                   <p className="text-xs text-slate-400 mb-1">{p.category}</p>
                   <p className="text-sm font-semibold text-slate-800 leading-tight mb-2">{p.name}</p>
-                  <p className="text-base font-bold text-blue-700">{fmtIdr(p.sellingPrice)}</p>
+                  <p className="text-base font-bold text-blue-700">{fmtIdr(p.prices[activeTier] ?? p.prices.retail)}</p>
+                  {activeTier !== "retail" && (
+                    <p className="text-xs text-slate-400">{TIER_LABELS[activeTier]}</p>
+                  )}
                 </button>
               );
             })}
@@ -384,6 +396,7 @@ export default function OwnerPosPage() {
             <div className="flex items-center justify-between bg-green-50 rounded-lg px-3 py-2">
               <div>
                 <p className="text-sm font-semibold text-green-800">{selectedCustomer.displayName}</p>
+                <p className="text-xs text-green-600 font-semibold">{TIER_LABELS[selectedCustomer.tier]}</p>
                 {selectedCustomer.phone && (
                   <p className="text-xs text-green-500">{selectedCustomer.phone}</p>
                 )}

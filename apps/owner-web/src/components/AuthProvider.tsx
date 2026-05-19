@@ -30,6 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           displayName: user.displayName ?? undefined,
           ownerId: claims["ownerId"],
           clubId: claims["clubId"],
+          isAdmin: claims["isAdmin"] === true,
         });
       } else {
         // Google user but owner not yet initialized — clear until they run init

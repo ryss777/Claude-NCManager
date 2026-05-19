@@ -1,6 +1,35 @@
 import { z } from "zod";
 import { idempotencySchema, tenantRefSchema } from "./common.schemas";
 
+const PRODUCT_CATEGORIES = ["Inner Nutrition", "Outer Nutrition", "Accessories"] as const;
+
+const priceTiersSchema = z.object({
+  retail: z.number().min(0),
+  ds: z.number().min(0),
+  sc: z.number().min(0),
+  sbQp: z.number().min(0),
+  spv: z.number().min(0),
+});
+
+export const createProductCatalogSchema = z.object({
+  name: z.string().min(1).max(100),
+  category: z.enum(PRODUCT_CATEGORIES),
+  prices: priceTiersSchema,
+});
+
+export const updateProductCatalogSchema = z.object({
+  productId: z.string().min(1),
+  name: z.string().min(1).max(100).optional(),
+  category: z.enum(PRODUCT_CATEGORIES).optional(),
+  prices: priceTiersSchema.optional(),
+});
+
+export const addFromCatalogSchema = tenantRefSchema.extend({
+  productCatalogId: z.string().min(1),
+  unit: z.string().min(1).max(20),
+  minimumStock: z.number().min(0),
+});
+
 const movementTypeSchema = z.enum([
   "sale",
   "restock",

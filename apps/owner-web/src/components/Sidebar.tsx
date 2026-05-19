@@ -20,7 +20,7 @@ const NAV = [
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { displayName, email, ownerId, clubId } = useOwnerAuthStore();
+  const { displayName, email, ownerId, clubId, isAdmin } = useOwnerAuthStore();
 
   async function handleSignOut() {
     await signOut();
@@ -55,6 +55,23 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      {/* Admin link */}
+      {isAdmin && (
+        <div className="px-3 pb-2">
+          <Link
+            href="/admin/catalog"
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition ${
+              pathname.startsWith("/admin")
+                ? "bg-brand-50 text-brand-700"
+                : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            }`}
+          >
+            <span className="text-base">⚙️</span>
+            Katalog Global
+          </Link>
+        </div>
+      )}
 
       {/* User */}
       <div className="px-4 py-4 border-t border-slate-100">

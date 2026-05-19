@@ -6,6 +6,7 @@ import {
   createInventoryMovementSchema,
   createInventoryItemSchema,
   adjustInventoryStockSchema,
+  addFromCatalogSchema,
 } from "@nc-manager/validation";
 import { COLLECTIONS } from "@nc-manager/shared-constants";
 
@@ -32,6 +33,48 @@ export const inventory_createItem = onCall(async (request) => {
     costPerUnit: payload.costPerUnit ?? 0,
     currentStock: 0,
     minimumStock: payload.minimumStock,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return { inventoryItemId: itemRef.id };
+});
+
+// ── inventory_addFromCatalog ──────────────────────────────────────────────────
+
+export const inventory_addFromCatalog = onCall(async (request) => {
+  requireRole(request, "owner");
+
+  const payload = validatePayload(addFromCatalogSchema, request.data);
+  const { ownerId, clubId, productCatalogId, unit, minimumStock } = payload;
+
+  const catalogSnap = await db.collection(COLLECTIONS.PRODUCT_CATALOG).doc(productCatalogId).get();
+  if (!catalogSnap.exists) throw new HttpsError("not-found", "Produk tidak ditemukan di katalog");
+  const catalog = catalogSnap.data()!;
+  if (!catalog["isActive"]) throw new HttpsError("failed-precondition", "Produk tidak aktif");
+
+  const existing = await db
+    .collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId))
+    .where("productCatalogId", "==", productCatalogId)
+    .limit(1)
+    .get();
+  if (!existing.empty) throw new HttpsError("already-exists", "Produk sudah ada di inventaris");
+
+  const itemRef = db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc();
+  const now = new Date().toISOString();
+
+  await itemRef.set({
+    id: itemRef.id,
+    ownerId,
+    clubId,
+    productCatalogId,
+    name: catalog["name"] as string,
+    category: catalog["category"] as string,
+    prices: catalog["prices"],
+    unit,
+    currentStock: 0,
+    minimumStock,
     isActive: true,
     createdAt: now,
     updatedAt: now,

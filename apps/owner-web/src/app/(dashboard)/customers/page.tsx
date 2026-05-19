@@ -7,11 +7,15 @@ import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
 import { v4 as uuidv4 } from "uuid";
 
+type CustomerTier = "retail" | "ds" | "sc" | "sbQp" | "spv";
+const TIER_LABELS: Record<CustomerTier, string> = { retail: "Retail", ds: "DS", sc: "SC", sbQp: "SB-QP", spv: "SPV" };
+
 interface Customer {
   id: string;
   displayName: string;
   phone: string | null;
   email: string | null;
+  tier: CustomerTier;
   activeMembershipId: string | null;
   createdAt: string;
 }
@@ -46,6 +50,7 @@ export default function CustomersPage() {
   const [displayName, setDisplayName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [tier, setTier] = useState<CustomerTier>("retail");
   const [createLoading, setCreateLoading] = useState(false);
   const [createFeedback, setCreateFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
@@ -94,9 +99,10 @@ export default function CustomersPage() {
         displayName,
         phone: phone || undefined,
         email: email || undefined,
+        tier,
       });
       setCreateFeedback({ type: "ok", msg: `Pelanggan "${displayName}" berhasil dibuat` });
-      setDisplayName(""); setPhone(""); setEmail("");
+      setDisplayName(""); setPhone(""); setEmail(""); setTier("retail");
       loadData();
     } catch (err) {
       setCreateFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
@@ -159,6 +165,7 @@ export default function CustomersPage() {
                 <thead className="bg-slate-50 text-slate-500 text-xs">
                   <tr>
                     <th className="px-4 py-2 text-left">Nama</th>
+                    <th className="px-4 py-2 text-left">Tier</th>
                     <th className="px-4 py-2 text-left">Kontak</th>
                     <th className="px-4 py-2 text-left">Membership</th>
                     <th className="px-4 py-2 text-right">Sisa Kunjungan</th>
@@ -177,6 +184,11 @@ export default function CustomersPage() {
                         className={`cursor-pointer hover:bg-slate-50 transition ${isSelected ? "bg-blue-50" : ""}`}
                       >
                         <td className="px-4 py-2.5 font-medium text-slate-800">{c.displayName}</td>
+                        <td className="px-4 py-2.5">
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                            {TIER_LABELS[c.tier] ?? c.tier}
+                          </span>
+                        </td>
                         <td className="px-4 py-2.5 text-slate-400 text-xs">{c.phone ?? c.email ?? "—"}</td>
                         <td className="px-4 py-2.5">
                           {mem ? (
@@ -219,6 +231,14 @@ export default function CustomersPage() {
               <div className="grid grid-cols-2 gap-3">
                 <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="No. HP (opsional)" value={phone} onChange={(e) => setPhone(e.target.value)} />
                 <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Email (opsional)" value={email} onChange={(e) => setEmail(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Level / Tier</label>
+                <select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={tier} onChange={(e) => setTier(e.target.value as CustomerTier)}>
+                  {(Object.entries(TIER_LABELS) as [CustomerTier, string][]).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
               </div>
               <button onClick={handleCreate} disabled={createLoading} className="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition">
                 {createLoading ? "Menyimpan…" : "Tambah Pelanggan"}

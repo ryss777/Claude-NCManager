@@ -26,17 +26,21 @@ interface CartItem {
   unitPrice: number;
 }
 
+type CustomerTier = "retail" | "ds" | "sc" | "sbQp" | "spv";
+interface PriceTiers { retail: number; ds: number; sc: number; sbQp: number; spv: number; }
+
 interface Product {
   id: string;
   name: string;
-  category: string;
-  sellingPrice: number;
+  category: string | null;
+  prices: PriceTiers;
 }
 
 interface Customer {
   id: string;
   displayName: string;
   phone: string | null;
+  tier: CustomerTier;
 }
 
 interface ActiveShift {
@@ -127,13 +131,16 @@ export default function PosScreen() {
     }
   }
 
+  const activeTier: CustomerTier = selectedCustomer?.tier ?? "retail";
+
   function addProduct(p: Product) {
+    const unitPrice = p.prices[activeTier] ?? p.prices.retail;
     setCart((c) => {
       const idx = c.findIndex((i) => i.productId === p.id);
       if (idx >= 0) {
         return c.map((item, i) => i === idx ? { ...item, qty: item.qty + 1 } : item);
       }
-      return [...c, { productId: p.id, productName: p.name, qty: 1, unitPrice: p.sellingPrice }];
+      return [...c, { productId: p.id, productName: p.name, qty: 1, unitPrice }];
     });
   }
 
@@ -275,7 +282,7 @@ export default function PosScreen() {
               {products.map((p) => (
                 <TouchableOpacity key={p.id} style={styles.productCard} onPress={() => addProduct(p)}>
                   <Text style={styles.productName} numberOfLines={2}>{p.name}</Text>
-                  <Text style={styles.productPrice}>Rp {fmt(p.sellingPrice)}</Text>
+                  <Text style={styles.productPrice}>Rp {fmt(p.prices[activeTier] ?? p.prices.retail)}</Text>
                 </TouchableOpacity>
               ))}
             </View>

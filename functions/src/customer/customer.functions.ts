@@ -8,7 +8,7 @@ export const customer_create = onCall(async (request) => {
   requireRole(request, "owner");
 
   const payload = validatePayload(createCustomerSchema, request.data);
-  const { ownerId, clubId, displayName, phone, email, notes } = payload;
+  const { ownerId, clubId, displayName, phone, email, tier, notes } = payload;
 
   const ref = db.collection(COLLECTIONS.CUSTOMERS(ownerId, clubId)).doc();
   const now = new Date().toISOString();
@@ -20,6 +20,7 @@ export const customer_create = onCall(async (request) => {
     displayName,
     phone: phone ?? null,
     email: email ?? null,
+    tier,
     notes: notes ?? null,
     activeMembershipId: null,
     createdAt: now,

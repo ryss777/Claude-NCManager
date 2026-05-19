@@ -1,3 +1,23 @@
+export type CustomerTier = "retail" | "ds" | "sc" | "sbQp" | "spv";
+
+export interface PriceTiers {
+  retail: number;
+  ds: number;
+  sc: number;
+  sbQp: number;
+  spv: number;
+}
+
+export interface ProductCatalog {
+  id: string;
+  name: string;
+  category: string;
+  prices: PriceTiers;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type MovementType =
   | "sale"
   | "restock"
@@ -12,12 +32,13 @@ export interface InventoryItem {
   id: string;
   ownerId: string;
   clubId: string;
+  productCatalogId: string | null;
   name: string;
-  sku: string;
+  category: string | null;
+  prices: PriceTiers;
   unit: string;
   currentStock: number;
   minimumStock: number;
-  costPerUnit: number;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

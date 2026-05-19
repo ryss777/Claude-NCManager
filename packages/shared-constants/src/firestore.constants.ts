@@ -1,4 +1,5 @@
 export const COLLECTIONS = {
+  PRODUCT_CATALOG: "productCatalog",
   OWNERS: "owners",
   CLUBS: (ownerId: string) => `owners/${ownerId}/clubs`,
   OPERATORS: (ownerId: string, clubId: string) =>

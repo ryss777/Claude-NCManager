@@ -2,6 +2,9 @@ import * as admin from "firebase-admin";
 
 admin.initializeApp();
 
+// Catalog Engine
+export * from "./catalog/catalog.functions";
+
 // Transaction Engine
 export * from "./transaction/pos.functions";
 export * from "./transaction/owner.pos.functions";

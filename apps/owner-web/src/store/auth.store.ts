@@ -8,6 +8,7 @@ interface OwnerAuthState {
   displayName: string | undefined;
   ownerId: string | undefined;
   clubId: string | undefined;
+  isAdmin: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
   setUser: (user: {
@@ -16,6 +17,7 @@ interface OwnerAuthState {
     displayName: string | undefined;
     ownerId: string;
     clubId: string;
+    isAdmin: boolean;
   }) => void;
   clearUser: () => void;
   setLoading: (loading: boolean) => void;
@@ -27,10 +29,11 @@ export const useOwnerAuthStore = create<OwnerAuthState>((set) => ({
   displayName: undefined,
   ownerId: undefined,
   clubId: undefined,
+  isAdmin: false,
   isAuthenticated: false,
   isLoading: true,
-  setUser: ({ uid, email, displayName, ownerId, clubId }) =>
-    set({ uid, email, displayName, ownerId, clubId, isAuthenticated: true, isLoading: false }),
+  setUser: ({ uid, email, displayName, ownerId, clubId, isAdmin }) =>
+    set({ uid, email, displayName, ownerId, clubId, isAdmin, isAuthenticated: true, isLoading: false }),
   clearUser: () =>
     set({
       uid: undefined,

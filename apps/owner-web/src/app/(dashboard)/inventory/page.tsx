@@ -6,36 +6,55 @@ import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
 import { v4 as uuidv4 } from "uuid";
 
+interface PriceTiers {
+  retail: number;
+  ds: number;
+  sc: number;
+  sbQp: number;
+  spv: number;
+}
+
 interface InventoryItem {
   id: string;
   name: string;
-  sku: string | null;
-  unit: string;
   category: string | null;
-  sellingPrice: number;
-  costPerUnit: number;
+  prices: PriceTiers;
+  unit: string;
   currentStock: number;
   minimumStock: number;
   isActive: boolean;
 }
 
-const CATEGORIES = ["Inner Nutrition", "Outer Nutrition", "Accessories"];
+interface CatalogProduct {
+  id: string;
+  name: string;
+  category: string;
+  prices: PriceTiers;
+}
+
+const TIER_LABELS: { key: keyof PriceTiers; label: string }[] = [
+  { key: "retail", label: "Retail" },
+  { key: "ds", label: "DS" },
+  { key: "sc", label: "SC" },
+  { key: "sbQp", label: "SB-QP" },
+  { key: "spv", label: "SPV" },
+];
+
+const fmt = (n: number) =>
+  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 
 export default function InventoryPage() {
   const { ownerId, clubId } = useOwnerAuthStore();
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [loadingList, setLoadingList] = useState(true);
 
-  // Create form
-  const [name, setName] = useState("");
-  const [sku, setSku] = useState("");
+  // Add from catalog
+  const [addingId, setAddingId] = useState<string | null>(null);
   const [unit, setUnit] = useState("pcs");
-  const [category, setCategory] = useState("");
-  const [sellingPrice, setSellingPrice] = useState("");
-  const [costPerUnit, setCostPerUnit] = useState("");
   const [minimumStock, setMinimumStock] = useState("");
-  const [createLoading, setCreateLoading] = useState(false);
-  const [createFeedback, setCreateFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
+  const [addLoading, setAddLoading] = useState(false);
+  const [addFeedback, setAddFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
   // Adjust stock
   const [adjustItemId, setAdjustItemId] = useState("");
@@ -53,38 +72,35 @@ export default function InventoryPage() {
     setLoadingList(false);
   }
 
-  useEffect(() => { loadItems(); }, [ownerId, clubId]);
+  async function loadCatalog() {
+    const snap = await getDocs(query(collection(firebaseDb(), "productCatalog"), orderBy("name")));
+    setCatalog(snap.docs.map((d) => ({ id: d.id, ...d.data() } as CatalogProduct)));
+  }
 
-  async function handleCreate() {
-    if (!name || !unit) {
-      setCreateFeedback({ type: "err", msg: "Nama dan satuan wajib diisi" });
-      return;
-    }
-    const sp = parseFloat(sellingPrice);
-    if (isNaN(sp) || sp < 0) {
-      setCreateFeedback({ type: "err", msg: "Harga jual tidak valid" });
-      return;
-    }
-    setCreateLoading(true);
-    setCreateFeedback(undefined);
+  useEffect(() => {
+    loadItems();
+    loadCatalog();
+  }, [ownerId, clubId]);
+
+  const addedIds = new Set(items.map((i) => (i as unknown as { productCatalogId?: string }).productCatalogId).filter(Boolean));
+  const availableCatalog = catalog.filter((p) => !addedIds.has(p.id));
+
+  async function handleAddFromCatalog(productCatalogId: string) {
+    setAddLoading(true);
+    setAddFeedback(undefined);
     try {
-      await callFunction("inventory_createItem", {
-        ownerId, clubId,
-        name,
-        sku: sku || undefined,
-        unit,
-        category: category || undefined,
-        sellingPrice: sp,
-        costPerUnit: parseFloat(costPerUnit) || 0,
+      await callFunction("inventory_addFromCatalog", {
+        ownerId, clubId, productCatalogId,
+        unit: unit || "pcs",
         minimumStock: parseFloat(minimumStock) || 0,
       });
-      setCreateFeedback({ type: "ok", msg: `"${name}" berhasil ditambahkan` });
-      setName(""); setSku(""); setUnit("pcs"); setCategory("");
-      setSellingPrice(""); setCostPerUnit(""); setMinimumStock("");
+      const prod = catalog.find((p) => p.id === productCatalogId);
+      setAddFeedback({ type: "ok", msg: `"${prod?.name}" berhasil ditambahkan ke inventaris` });
+      setAddingId(null); setUnit("pcs"); setMinimumStock("");
       loadItems();
     } catch (err) {
-      setCreateFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
-    } finally { setCreateLoading(false); }
+      setAddFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
+    } finally { setAddLoading(false); }
   }
 
   async function handleAdjust() {
@@ -112,21 +128,20 @@ export default function InventoryPage() {
     } finally { setAdjustLoading(false); }
   }
 
-  const fmt = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
-
   return (
     <div>
-      <h2 className="text-2xl font-bold text-slate-900 mb-6">Produk &amp; Inventaris</h2>
+      <h2 className="text-2xl font-bold text-slate-900 mb-6">Produk &amp; Stok</h2>
 
-      <div className="bg-white rounded-xl border border-slate-200 mb-6 overflow-hidden">
+      {/* Current inventory */}
+      <div className="bg-white rounded-xl border border-slate-200 mb-6 overflow-x-auto">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-          <h3 className="font-semibold text-slate-800">Daftar Item</h3>
+          <h3 className="font-semibold text-slate-800">Stok Saat Ini</h3>
           <button onClick={loadItems} className="text-xs text-blue-600 hover:underline">Refresh</button>
         </div>
         {loadingList ? (
           <p className="text-sm text-slate-400 p-4">Memuat…</p>
         ) : items.length === 0 ? (
-          <p className="text-sm text-slate-400 p-4">Belum ada item.</p>
+          <p className="text-sm text-slate-400 p-4">Belum ada produk. Tambahkan dari katalog di bawah.</p>
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs">
@@ -134,10 +149,11 @@ export default function InventoryPage() {
                 <th className="px-4 py-2 text-left">Nama</th>
                 <th className="px-4 py-2 text-left">Kategori</th>
                 <th className="px-4 py-2 text-left">Satuan</th>
-                <th className="px-4 py-2 text-right">Harga Jual</th>
+                {TIER_LABELS.map((t) => (
+                  <th key={t.key} className="px-3 py-2 text-right">{t.label}</th>
+                ))}
                 <th className="px-4 py-2 text-right">Stok</th>
-                <th className="px-4 py-2 text-right">Min. Stok</th>
-                <th className="px-4 py-2 text-left">SKU</th>
+                <th className="px-4 py-2 text-right">Min.</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -146,12 +162,17 @@ export default function InventoryPage() {
                 return (
                   <tr key={item.id} className={`hover:bg-slate-50 ${lowStock ? "bg-red-50/40" : ""}`}>
                     <td className="px-4 py-2 font-medium">{item.name}</td>
-                    <td className="px-4 py-2 text-slate-500">{item.category ?? "—"}</td>
+                    <td className="px-4 py-2 text-slate-500 text-xs">{item.category ?? "—"}</td>
                     <td className="px-4 py-2 text-slate-500">{item.unit}</td>
-                    <td className="px-4 py-2 text-right font-semibold text-blue-700">{fmt(item.sellingPrice)}</td>
-                    <td className={`px-4 py-2 text-right font-semibold ${lowStock ? "text-red-600" : "text-slate-800"}`}>{item.currentStock}</td>
+                    {TIER_LABELS.map((t) => (
+                      <td key={t.key} className="px-3 py-2 text-right font-mono text-xs text-slate-600">
+                        {item.prices ? fmt(item.prices[t.key]) : "—"}
+                      </td>
+                    ))}
+                    <td className={`px-4 py-2 text-right font-semibold ${lowStock ? "text-red-600" : "text-slate-800"}`}>
+                      {item.currentStock}
+                    </td>
                     <td className="px-4 py-2 text-right text-slate-400">{item.minimumStock}</td>
-                    <td className="px-4 py-2 font-mono text-xs text-slate-400">{item.sku ?? "—"}</td>
                   </tr>
                 );
               })}
@@ -160,37 +181,65 @@ export default function InventoryPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-6 max-w-2xl">
+      <div className="grid grid-cols-2 gap-6">
+        {/* Add from catalog */}
         <div className="bg-white rounded-xl border border-slate-200 p-6">
-          <h3 className="font-semibold text-slate-800 mb-4">Tambah Item Baru</h3>
-          {createFeedback && (
-            <div className={`mb-3 text-sm rounded-lg px-3 py-2 ${createFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-              {createFeedback.msg}
+          <h3 className="font-semibold text-slate-800 mb-1">Tambah dari Katalog</h3>
+          <p className="text-xs text-slate-400 mb-4">Pilih produk dari katalog global untuk ditambahkan ke stok klub ini.</p>
+          {addFeedback && (
+            <div className={`mb-3 text-sm rounded-lg px-3 py-2 ${addFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+              {addFeedback.msg}
             </div>
           )}
-          <div className="space-y-3">
-            <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Nama Item *" value={name} onChange={(e) => setName(e.target.value)} />
-            <div className="grid grid-cols-2 gap-3">
-              <select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={category} onChange={(e) => setCategory(e.target.value)}>
-                <option value="">Kategori (opsional)</option>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-              <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Satuan (pcs, kg…) *" value={unit} onChange={(e) => setUnit(e.target.value)} />
+          {availableCatalog.length === 0 ? (
+            <p className="text-sm text-slate-400">Semua produk dari katalog sudah ditambahkan.</p>
+          ) : (
+            <div className="space-y-2">
+              {availableCatalog.map((p) => (
+                <div key={p.id} className="border border-slate-200 rounded-lg p-3">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-800">{p.name}</p>
+                      <p className="text-xs text-slate-400">{p.category} · Retail {fmt(p.prices.retail)}</p>
+                    </div>
+                    <button
+                      onClick={() => { setAddingId(addingId === p.id ? null : p.id); setAddFeedback(undefined); }}
+                      className="text-xs text-blue-600 hover:underline shrink-0 ml-2"
+                    >
+                      {addingId === p.id ? "Batal" : "Tambah"}
+                    </button>
+                  </div>
+                  {addingId === p.id && (
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex gap-2">
+                      <input
+                        className="flex-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"
+                        placeholder="Satuan (pcs, kg…)"
+                        value={unit}
+                        onChange={(e) => setUnit(e.target.value)}
+                      />
+                      <input
+                        type="number"
+                        className="w-24 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"
+                        placeholder="Min. Stok"
+                        value={minimumStock}
+                        onChange={(e) => setMinimumStock(e.target.value)}
+                      />
+                      <button
+                        onClick={() => handleAddFromCatalog(p.id)}
+                        disabled={addLoading}
+                        className="bg-orange-600 text-white text-xs px-4 py-1.5 rounded-lg hover:bg-orange-700 disabled:opacity-50 transition"
+                      >
+                        {addLoading ? "…" : "Simpan"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <input type="number" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Harga Jual (Rp) *" value={sellingPrice} onChange={(e) => setSellingPrice(e.target.value)} />
-              <input type="number" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Harga Modal (Rp)" value={costPerUnit} onChange={(e) => setCostPerUnit(e.target.value)} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <input type="number" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Min. Stok" value={minimumStock} onChange={(e) => setMinimumStock(e.target.value)} />
-              <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="SKU (opsional)" value={sku} onChange={(e) => setSku(e.target.value)} />
-            </div>
-            <button onClick={handleCreate} disabled={createLoading} className="w-full bg-orange-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-orange-700 disabled:opacity-50 transition">
-              {createLoading ? "Menyimpan…" : "Tambah Item"}
-            </button>
-          </div>
+          )}
         </div>
 
+        {/* Adjust stock */}
         <div className="bg-white rounded-xl border border-slate-200 p-6">
           <h3 className="font-semibold text-slate-800 mb-1">Sesuaikan Stok</h3>
           <p className="text-xs text-slate-400 mb-4">Set stok absolut berdasarkan hitung fisik.</p>

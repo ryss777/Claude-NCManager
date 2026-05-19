@@ -26,3 +26,10 @@ export function requireRole(request: CallableRequest, role: string): void {
     throw new HttpsError("permission-denied", `Role '${role}' required`);
   }
 }
+
+export function requireAdmin(request: CallableRequest): void {
+  requireAuth(request);
+  if ((request.auth.token as Record<string, unknown>)["isAdmin"] !== true) {
+    throw new HttpsError("permission-denied", "Admin only");
+  }
+}
