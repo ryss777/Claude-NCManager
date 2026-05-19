@@ -36,6 +36,7 @@ interface Plan {
   name: string;
   tier: string;
   price: number;
+  visitQuota: number;
 }
 
 export default function CustomersPage() {
@@ -58,6 +59,13 @@ export default function CustomersPage() {
   const [activatePlanId, setActivatePlanId] = useState("");
   const [activateLoading, setActivateLoading] = useState(false);
   const [activateFeedback, setActivateFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
+
+  // Confirmation dialog
+  const [confirmDialog, setConfirmDialog] = useState<{
+    customer: Customer;
+    plan: Plan;
+    currentMembership: Membership | null;
+  } | null>(null);
 
   // Change tier
   const [changeTier, setChangeTier] = useState<CustomerTier>("retail");
@@ -130,23 +138,46 @@ export default function CustomersPage() {
     } finally { setTierLoading(false); }
   }
 
-  async function handleActivate() {
+  function handleActivate() {
     if (!selected || !activatePlanId) {
       setActivateFeedback({ type: "err", msg: "Pilih paket terlebih dahulu" });
       return;
     }
+    const plan = plans.find((p) => p.id === activatePlanId);
+    if (!plan) return;
+    const currentMembership = memberships.get(selected.id) ?? null;
+    setConfirmDialog({ customer: selected, plan, currentMembership });
+  }
+
+  async function confirmActivate() {
+    if (!confirmDialog || !ownerId || !clubId) return;
+    const { customer, plan, currentMembership } = confirmDialog;
+    setConfirmDialog(null);
     setActivateLoading(true);
     setActivateFeedback(undefined);
     try {
-      await callFunction("membership_activate", {
-        ownerId, clubId,
-        requestId: uuidv4(),
-        operationId: uuidv4(),
-        customerId: selected.id,
-        planId: activatePlanId,
-        transactionId: uuidv4(),
-      });
-      setActivateFeedback({ type: "ok", msg: "Membership berhasil diaktifkan" });
+      if (currentMembership) {
+        await callFunction("membership_upgrade", {
+          ownerId, clubId,
+          requestId: uuidv4(),
+          operationId: uuidv4(),
+          customerId: customer.id,
+          currentMembershipId: currentMembership.id,
+          newPlanId: plan.id,
+          transactionId: uuidv4(),
+        });
+        setActivateFeedback({ type: "ok", msg: `Membership diperbarui ke ${plan.name} (+${currentMembership.visitRemaining} kunjungan carryover)` });
+      } else {
+        await callFunction("membership_activate", {
+          ownerId, clubId,
+          requestId: uuidv4(),
+          operationId: uuidv4(),
+          customerId: customer.id,
+          planId: plan.id,
+          transactionId: uuidv4(),
+        });
+        setActivateFeedback({ type: "ok", msg: `Membership ${plan.name} berhasil diaktifkan` });
+      }
       setActivatePlanId("");
       loadData();
     } catch (err) {
@@ -154,7 +185,6 @@ export default function CustomersPage() {
     } finally { setActivateLoading(false); }
   }
 
-  const fmt = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
   const TIER_COLOR: Record<string, string> = {
     basic: "bg-slate-100 text-slate-600",
     silver: "bg-slate-200 text-slate-700",
@@ -162,8 +192,69 @@ export default function CustomersPage() {
     platinum: "bg-blue-50 text-blue-700",
   };
 
+  const fmt = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+
   return (
     <div>
+      {/* Confirmation dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
+            <h3 className="text-lg font-bold text-slate-900 mb-1">Konfirmasi Membership</h3>
+            <p className="text-sm text-slate-500 mb-5">
+              {confirmDialog.customer.displayName}
+            </p>
+
+            {confirmDialog.currentMembership ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 space-y-2">
+                <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide">Ganti Membership</p>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Paket saat ini</span>
+                  <span className="font-medium text-slate-700">{confirmDialog.currentMembership.planName}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Sisa kunjungan</span>
+                  <span className="font-semibold text-amber-700">{confirmDialog.currentMembership.visitRemaining} kunjungan</span>
+                </div>
+                <div className="border-t border-amber-200 pt-2 flex justify-between text-sm">
+                  <span className="text-slate-500">Paket baru</span>
+                  <span className="font-medium text-slate-700">{confirmDialog.plan.name}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Kuota paket baru</span>
+                  <span className="font-medium">{confirmDialog.plan.visitQuota} kunjungan</span>
+                </div>
+                <div className="flex justify-between text-sm font-semibold text-green-700 bg-green-50 rounded-lg px-3 py-2">
+                  <span>Total kunjungan</span>
+                  <span>{confirmDialog.plan.visitQuota} + {confirmDialog.currentMembership.visitRemaining} = {confirmDialog.plan.visitQuota + confirmDialog.currentMembership.visitRemaining} kunjungan</span>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-50 rounded-xl p-4 mb-5">
+                <p className="text-xs text-slate-500 mb-1">Aktivasi Pertama</p>
+                <p className="text-sm font-semibold text-slate-800">{confirmDialog.plan.name}</p>
+                <p className="text-sm text-slate-500">{confirmDialog.plan.visitQuota} kunjungan · {fmt(confirmDialog.plan.price)}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 transition"
+              >
+                Batal
+              </button>
+              <button
+                onClick={confirmActivate}
+                className="flex-1 bg-green-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-green-700 transition"
+              >
+                Ya, Aktifkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h2 className="text-2xl font-bold text-slate-900 mb-6">Pelanggan</h2>
 
       <div className="flex gap-6">

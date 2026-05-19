@@ -240,7 +240,11 @@ export const membership_deductVisit = onCall(async (request) => {
  * Carries over remaining visits proportionally.
  */
 export const membership_upgrade = onCall(async (request) => {
-  requireRole(request, "operator");
+  requireAuth(request);
+  const role = (request.auth.token as Record<string, unknown>)["role"] as string;
+  if (role !== "operator" && role !== "owner") {
+    throw new HttpsError("permission-denied", "Operator or owner role required");
+  }
 
   const payload = validatePayload(upgradeMembershipSchema, request.data);
   const { ownerId, clubId, operationId, currentMembershipId, newPlanId, customerId } = payload;
@@ -268,7 +272,7 @@ export const membership_upgrade = onCall(async (request) => {
   }
 
   const now = new Date().toISOString();
-  const remainingVisits = current["visitRemaining"] as number;
+  const carryOverVisits = current["visitRemaining"] as number;
   const newVisitQuota = newPlan["visitQuota"] as number;
   const newHasExpiry = (newPlan["hasExpiry"] as boolean) ?? true;
   const newDurationDays = newPlan["durationDays"] as number | null;
@@ -281,8 +285,7 @@ export const membership_upgrade = onCall(async (request) => {
     // Expire current membership
     tx.update(currentSnap.ref, { status: "expired", updatedAt: now });
 
-    // Create upgraded membership, carrying over remaining visits
-    const carryOver = Math.min(remainingVisits, newVisitQuota);
+    // Create new membership — remaining visits are ADDED on top of new quota
     tx.set(newMembershipRef, {
       id: newMembershipRef.id,
       ownerId,
@@ -293,8 +296,9 @@ export const membership_upgrade = onCall(async (request) => {
       tier: newPlan["tier"] as string,
       status: "active",
       visitQuota: newVisitQuota,
-      visitUsed: newVisitQuota - carryOver,
-      visitRemaining: carryOver,
+      visitUsed: 0,
+      visitRemaining: newVisitQuota + carryOverVisits,
+      carryOverVisits,
       balance: 0,
       activatedAt: now,
       expiresAt,
@@ -328,5 +332,5 @@ export const membership_upgrade = onCall(async (request) => {
     });
   });
 
-  return { newMembershipId: newMembershipRef.id, expiresAt };
+  return { newMembershipId: newMembershipRef.id, expiresAt, carryOverVisits };
 });
