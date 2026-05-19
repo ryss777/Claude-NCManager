@@ -36,6 +36,15 @@ export const createInventoryItemSchema = tenantRefSchema.extend({
   minimumStock: z.number().min(0),
 });
 
+export const adjustInventoryStockSchema = tenantRefSchema
+  .merge(idempotencySchema)
+  .extend({
+    inventoryItemId: z.string().min(1),
+    quantity: z.number().min(0),
+    unitCost: z.number().min(0),
+    notes: z.string().max(500).optional(),
+  });
+
 export type CreateInventoryMovementInput = z.infer<
   typeof createInventoryMovementSchema
 >;

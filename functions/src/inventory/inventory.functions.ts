@@ -5,6 +5,7 @@ import { checkIdempotency, throwIfDuplicate, markOperationComplete } from "../ut
 import {
   createInventoryMovementSchema,
   createInventoryItemSchema,
+  adjustInventoryStockSchema,
 } from "@nc-manager/validation";
 import { COLLECTIONS } from "@nc-manager/shared-constants";
 
@@ -135,7 +136,7 @@ export const inventory_createMovement = onCall(async (request) => {
 export const inventory_adjustStock = onCall(async (request) => {
   requireRole(request, "owner");
 
-  const payload = validatePayload(createInventoryMovementSchema, request.data);
+  const payload = validatePayload(adjustInventoryStockSchema, request.data);
   const { ownerId, clubId, operationId, inventoryItemId, quantity, unitCost } = payload;
 
   const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
@@ -171,7 +172,7 @@ export const inventory_adjustStock = onCall(async (request) => {
       stockAfter,
       unitCost,
       totalCost: Math.abs(adjustmentDelta) * unitCost,
-      referenceId: payload.referenceId ?? null,
+      referenceId: null,
       referenceType: "manual",
       operatorId: request.auth!.uid,
       notes: payload.notes ?? null,
