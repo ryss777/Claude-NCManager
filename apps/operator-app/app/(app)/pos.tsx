@@ -29,8 +29,8 @@ interface CartItem {
 interface Product {
   id: string;
   name: string;
-  sku: string;
-  costPerUnit: number;
+  category: string;
+  sellingPrice: number;
 }
 
 interface Customer {
@@ -115,7 +115,7 @@ export default function PosScreen() {
       const db = firebaseDb();
       const base = `owners/${ownerId}/clubs/${clubId}`;
       const [itemsSnap, custSnap] = await Promise.all([
-        getDocs(query(collection(db, `${base}/inventoryItems`), where("isActive", "==", true))),
+        getDocs(query(collection(db, `${base}/products`), where("isActive", "==", true))),
         getDocs(collection(db, `${base}/customers`)),
       ]);
       setProducts(itemsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Product)));
@@ -133,7 +133,7 @@ export default function PosScreen() {
       if (idx >= 0) {
         return c.map((item, i) => i === idx ? { ...item, qty: item.qty + 1 } : item);
       }
-      return [...c, { productId: p.id, productName: p.name, qty: 1, unitPrice: p.costPerUnit }];
+      return [...c, { productId: p.id, productName: p.name, qty: 1, unitPrice: p.sellingPrice }];
     });
   }
 
@@ -275,7 +275,7 @@ export default function PosScreen() {
               {products.map((p) => (
                 <TouchableOpacity key={p.id} style={styles.productCard} onPress={() => addProduct(p)}>
                   <Text style={styles.productName} numberOfLines={2}>{p.name}</Text>
-                  <Text style={styles.productPrice}>Rp {fmt(p.costPerUnit)}</Text>
+                  <Text style={styles.productPrice}>Rp {fmt(p.sellingPrice)}</Text>
                 </TouchableOpacity>
               ))}
             </View>

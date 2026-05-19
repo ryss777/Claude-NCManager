@@ -7,13 +7,14 @@ import { useOwnerAuthStore } from "@/store/auth.store";
 
 const NAV = [
   { href: "/", label: "Beranda", icon: "⊞" },
-  { href: "/finance", label: "Keuangan", icon: "₿" },
-  { href: "/operators", label: "Operator", icon: "👤" },
-  { href: "/membership", label: "Paket Member", icon: "⭐" },
-  { href: "/inventory", label: "Inventaris", icon: "📦" },
   { href: "/customers", label: "Pelanggan", icon: "🧑‍🤝‍🧑" },
-  { href: "/reports", label: "Laporan", icon: "📊" },
+  { href: "/membership", label: "Paket Member", icon: "⭐" },
+  { href: "/products", label: "Produk", icon: "🛍️" },
+  { href: "/inventory", label: "Inventaris", icon: "📦" },
+  { href: "/operators", label: "Operator", icon: "👤" },
   { href: "/devices", label: "Device", icon: "📱" },
+  { href: "/finance", label: "Keuangan", icon: "₿" },
+  { href: "/reports", label: "Laporan", icon: "📊" },
 ];
 
 export function Sidebar() {
