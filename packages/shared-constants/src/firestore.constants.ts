@@ -26,6 +26,15 @@ export const COLLECTIONS = {
     `owners/${ownerId}/clubs/${clubId}/inventoryMovements`,
   FINANCE_JOURNAL: (ownerId: string, clubId: string) =>
     `owners/${ownerId}/clubs/${clubId}/financeJournal`,
+  REPLENISHMENTS: (ownerId: string, clubId: string) =>
+    `owners/${ownerId}/clubs/${clubId}/replenishments`,
+  PRODUCT_TRANSFERS: (ownerId: string) => `owners/${ownerId}/productTransfers`,
+  CUSTOMER_NOTIFICATIONS: (ownerId: string, clubId: string) =>
+    `owners/${ownerId}/clubs/${clubId}/customerNotifications`,
   EVENTS: (ownerId: string, clubId: string) =>
     `owners/${ownerId}/clubs/${clubId}/events`,
+  OWNER_NOTIFICATIONS: (ownerId: string) =>
+    `owners/${ownerId}/notifications`,
+  DEBTS: (ownerId: string, clubId: string) =>
+    `owners/${ownerId}/clubs/${clubId}/debts`,
 } as const;

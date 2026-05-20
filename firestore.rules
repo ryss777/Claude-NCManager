@@ -166,6 +166,15 @@ service cloud.firestore {
           allow delete: if false;
         }
 
+        // ── Debts ───────────────────────────────────────────────────────────
+
+        match /debts/{debtId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow create: if false; // Cloud Function only
+          allow update: if false; // Cloud Function only
+          allow delete: if false;
+        }
+
         // ── Finance Journal ─────────────────────────────────────────────────
 
         match /financeJournal/{entryId} {

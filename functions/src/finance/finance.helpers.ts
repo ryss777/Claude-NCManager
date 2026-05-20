@@ -13,7 +13,7 @@ export interface JournalEntryParams {
   requestId: string;
   operationId: string;
   referenceId?: string | undefined;
-  referenceType?: "transaction" | "shift" | "membership" | "manual" | undefined;
+  referenceType?: "transaction" | "shift" | "membership" | "manual" | "replenishment" | "debt" | undefined;
   shiftId?: string | undefined;
   operatorId?: string | undefined;
   reversedEntryId?: string | undefined;

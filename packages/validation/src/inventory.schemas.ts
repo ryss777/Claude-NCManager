@@ -2,6 +2,8 @@ import { z } from "zod";
 import { idempotencySchema, tenantRefSchema } from "./common.schemas";
 
 const PRODUCT_CATEGORIES = ["Inner Nutrition", "Outer Nutrition", "Accessories"] as const;
+const PRODUCT_UNITS = ["pcs", "kaleng", "botol"] as const;
+const unitSchema = z.enum(PRODUCT_UNITS);
 
 const priceTiersSchema = z.object({
   retail: z.number().min(0),
@@ -26,7 +28,7 @@ export const updateProductCatalogSchema = z.object({
 
 export const addFromCatalogSchema = tenantRefSchema.extend({
   productCatalogId: z.string().min(1),
-  unit: z.string().min(1).max(20),
+  unit: unitSchema,
   minimumStock: z.number().min(0),
 });
 
@@ -57,12 +59,15 @@ export const createInventoryMovementSchema = tenantRefSchema
 
 export const createInventoryItemSchema = tenantRefSchema.extend({
   name: z.string().min(1).max(100),
-  sku: z.string().max(50).optional(),
-  unit: z.string().min(1).max(20),
+  unit: unitSchema,
   category: z.string().max(50).optional(),
-  sellingPrice: z.number().min(0),
-  costPerUnit: z.number().min(0).optional(),
-  minimumStock: z.number().min(0),
+  prices: priceTiersSchema,
+  minimumStock: z.number().min(0).default(0),
+});
+
+export const removeInventoryItemSchema = tenantRefSchema.extend({
+  inventoryItemId: z.string().min(1),
+  force: z.boolean().default(false),
 });
 
 export const adjustInventoryStockSchema = tenantRefSchema
@@ -73,6 +78,20 @@ export const adjustInventoryStockSchema = tenantRefSchema
     unitCost: z.number().min(0),
     notes: z.string().max(500).optional(),
   });
+
+const replenishmentItemSchema = z.object({
+  productId: z.string().min(1),
+  productName: z.string().min(1),
+  quantity: z.number().int().min(1),
+  unitPrice: z.number().min(0),
+  subtotal: z.number().min(0),
+});
+
+export const createReplenishmentSchema = tenantRefSchema.merge(idempotencySchema).extend({
+  items: z.array(replenishmentItemSchema).min(1),
+  priceTier: z.enum(["retail", "ds", "sc", "sbQp", "spv"]),
+  notes: z.string().max(500).optional(),
+});
 
 export type CreateInventoryMovementInput = z.infer<
   typeof createInventoryMovementSchema

@@ -66,9 +66,11 @@ export const ownerSaleSchema = tenantRefSchema
     (data) => {
       const subtotal = data.items.reduce((sum, item) => sum + item.subtotal, 0);
       const total = subtotal - data.discount;
-      return data.amountPaid >= total;
+      const remainingDebt = total - data.amountPaid;
+      if (remainingDebt > 0 && !data.customerId) return false;
+      return true;
     },
-    { message: "amountPaid must be >= total after discount" }
+    { message: "customerId wajib diisi ketika amountPaid kurang dari total" }
   );
 
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;

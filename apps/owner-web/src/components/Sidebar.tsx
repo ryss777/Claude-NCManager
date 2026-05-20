@@ -7,12 +7,15 @@ import { useOwnerAuthStore } from "@/store/auth.store";
 
 const NAV = [
   { href: "/", label: "Beranda", icon: "⊞" },
-  { href: "/pos", label: "Kasir Owner", icon: "🖥️" },
+  { href: "/pos", label: "POS", icon: "🖥️" },
+  { href: "/transfer", label: "Transfer Masuk", icon: "↔️" },
   { href: "/customers", label: "Pelanggan", icon: "🧑‍🤝‍🧑" },
   { href: "/membership", label: "Paket Member", icon: "⭐" },
   { href: "/inventory", label: "Produk & Stok", icon: "📦" },
   { href: "/operators", label: "Operator", icon: "👤" },
   { href: "/devices", label: "Device", icon: "📱" },
+  { href: "/transactions", label: "Riwayat Transaksi", icon: "🧾" },
+  { href: "/debts", label: "Utang Piutang", icon: "💰" },
   { href: "/finance", label: "Keuangan", icon: "₿" },
   { href: "/reports", label: "Laporan", icon: "📊" },
 ];

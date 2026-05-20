@@ -7,6 +7,7 @@ import {
   createInventoryItemSchema,
   adjustInventoryStockSchema,
   addFromCatalogSchema,
+  removeInventoryItemSchema,
 } from "@nc-manager/validation";
 import { COLLECTIONS } from "@nc-manager/shared-constants";
 
@@ -26,11 +27,9 @@ export const inventory_createItem = onCall(async (request) => {
     ownerId,
     clubId,
     name: payload.name,
-    sku: payload.sku ?? null,
     unit: payload.unit,
     category: payload.category ?? null,
-    sellingPrice: payload.sellingPrice,
-    costPerUnit: payload.costPerUnit ?? 0,
+    prices: payload.prices,
     currentStock: 0,
     minimumStock: payload.minimumStock,
     isActive: true,
@@ -54,15 +53,25 @@ export const inventory_addFromCatalog = onCall(async (request) => {
   const catalog = catalogSnap.data()!;
   if (!catalog["isActive"]) throw new HttpsError("failed-precondition", "Produk tidak aktif");
 
-  const existing = await db
+  const existingSnap = await db
     .collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId))
     .where("productCatalogId", "==", productCatalogId)
     .limit(1)
     .get();
-  if (!existing.empty) throw new HttpsError("already-exists", "Produk sudah ada di inventaris");
+
+  const now = new Date().toISOString();
+
+  if (!existingSnap.empty) {
+    const existingDoc = existingSnap.docs[0]!;
+    if (existingDoc.data()["isActive"] !== false) {
+      throw new HttpsError("already-exists", "Produk sudah ada di inventaris");
+    }
+    // Reactivate soft-deleted item
+    await existingDoc.ref.update({ isActive: true, unit, minimumStock, updatedAt: now });
+    return { inventoryItemId: existingDoc.id };
+  }
 
   const itemRef = db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc();
-  const now = new Date().toISOString();
 
   await itemRef.set({
     id: itemRef.id,
@@ -236,4 +245,29 @@ export const inventory_adjustStock = onCall(async (request) => {
   });
 
   return { movementId: movementRef.id, stockBefore: currentStock, stockAfter };
+});
+
+// ── inventory_removeItem ──────────────────────────────────────────────────────
+
+export const inventory_removeItem = onCall(async (request) => {
+  requireRole(request, "owner");
+
+  const payload = validatePayload(removeInventoryItemSchema, request.data);
+  const { ownerId, clubId, inventoryItemId, force } = payload;
+
+  const itemRef = db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc(inventoryItemId);
+  const snap = await itemRef.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Item tidak ditemukan");
+
+  const currentStock = (snap.data()!["currentStock"] as number) ?? 0;
+  if (currentStock > 0 && !force) {
+    throw new HttpsError(
+      "failed-precondition",
+      `Stok masih ${currentStock}. Gunakan force:true untuk tetap menghapus.`
+    );
+  }
+
+  await itemRef.update({ isActive: false, updatedAt: new Date().toISOString() });
+
+  return { removed: true };
 });

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { collection, getDocs, query, orderBy, where, updateDoc, deleteDoc, doc } from "firebase/firestore";
+import { collection, getDocs, query, orderBy, where, updateDoc, doc } from "firebase/firestore";
+import { v4 as uuidv4 } from "uuid";
 import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
 
@@ -18,6 +19,7 @@ const TIER_COLORS: Record<Tier, string> = {
 
 interface Plan {
   id: string;
+  planType?: "regular" | "locker";
   name: string;
   tier: Tier;
   price: number;
@@ -26,6 +28,7 @@ interface Plan {
   durationDays: number | null;
   benefits: string[];
   isActive: boolean;
+  blendingFeePerSession?: number;
 }
 
 const fmt = (n: number) =>
@@ -37,10 +40,12 @@ export default function MembershipPage() {
   const [loadingList, setLoadingList] = useState(true);
 
   // Create form
+  const [createPlanType, setCreatePlanType] = useState<"regular" | "locker">("regular");
   const [name, setName] = useState("");
   const [tier, setTier] = useState<Tier>("silver");
   const [price, setPrice] = useState("");
   const [visitQuota, setVisitQuota] = useState("");
+  const [blendingFee, setBlendingFee] = useState("5000");
   const [hasExpiry, setHasExpiry] = useState(true);
   const [durationDays, setDurationDays] = useState("");
   const [benefits, setBenefits] = useState("");
@@ -59,10 +64,12 @@ export default function MembershipPage() {
 
   // Edit state
   const [editId, setEditId] = useState<string | null>(null);
+  const [editPlanType, setEditPlanType] = useState<"regular" | "locker">("regular");
   const [editName, setEditName] = useState("");
   const [editTier, setEditTier] = useState<Tier>("silver");
   const [editPrice, setEditPrice] = useState("");
   const [editVisitQuota, setEditVisitQuota] = useState("");
+  const [editBlendingFee, setEditBlendingFee] = useState("");
   const [editHasExpiry, setEditHasExpiry] = useState(true);
   const [editDurationDays, setEditDurationDays] = useState("");
   const [editBenefits, setEditBenefits] = useState("");
@@ -86,27 +93,43 @@ export default function MembershipPage() {
   useEffect(() => { loadPlans(); }, [ownerId, clubId]);
 
   async function handleCreate() {
-    if (!name || !price || !visitQuota) {
-      setFeedback({ type: "err", msg: "Nama, harga, dan kuota wajib diisi" });
-      return;
+    if (!name) { setFeedback({ type: "err", msg: "Nama paket wajib diisi" }); return; }
+    if (createPlanType === "regular" && (!price || !visitQuota)) {
+      setFeedback({ type: "err", msg: "Harga dan kuota wajib diisi untuk paket regular" }); return;
+    }
+    if (createPlanType === "locker" && !blendingFee) {
+      setFeedback({ type: "err", msg: "Biaya blender per sesi wajib diisi" }); return;
     }
     if (hasExpiry && !durationDays) {
-      setFeedback({ type: "err", msg: "Durasi wajib diisi jika expired aktif" });
-      return;
+      setFeedback({ type: "err", msg: "Durasi wajib diisi jika expired aktif" }); return;
     }
     setLoading(true);
     setFeedback(undefined);
     try {
-      await callFunction("membership_createPlan", {
-        ownerId, clubId, name, tier,
-        price: parseFloat(price),
-        visitQuota: parseInt(visitQuota, 10),
-        hasExpiry,
-        durationDays: hasExpiry ? parseInt(durationDays, 10) : undefined,
-        benefits: benefits.split("\n").map((s) => s.trim()).filter(Boolean),
-      });
+      if (createPlanType === "locker") {
+        await callFunction("membership_createPlan", {
+          ownerId, clubId,
+          planType: "locker",
+          name,
+          visitQuota: visitQuota ? parseInt(visitQuota, 10) : 0,
+          blendingFeePerSession: parseFloat(blendingFee),
+          hasExpiry,
+          durationDays: hasExpiry ? parseInt(durationDays, 10) : undefined,
+          benefits: benefits.split("\n").map((s) => s.trim()).filter(Boolean),
+        });
+      } else {
+        await callFunction("membership_createPlan", {
+          ownerId, clubId, name, tier,
+          price: parseFloat(price),
+          visitQuota: parseInt(visitQuota, 10),
+          hasExpiry,
+          durationDays: hasExpiry ? parseInt(durationDays, 10) : undefined,
+          benefits: benefits.split("\n").map((s) => s.trim()).filter(Boolean),
+        });
+      }
       setFeedback({ type: "ok", msg: `Paket "${name}" berhasil dibuat` });
-      setName(""); setPrice(""); setVisitQuota(""); setHasExpiry(true); setDurationDays(""); setBenefits("");
+      setName(""); setPrice(""); setVisitQuota(""); setBlendingFee("");
+      setHasExpiry(true); setDurationDays(""); setBenefits("");
       loadPlans();
     } catch (err) {
       setFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
@@ -115,30 +138,35 @@ export default function MembershipPage() {
 
   function startEdit(p: Plan) {
     setEditId(p.id);
+    setEditPlanType(p.planType === "locker" ? "locker" : "regular");
     setEditName(p.name);
-    setEditTier(p.tier);
-    setEditPrice(p.price.toString());
-    setEditVisitQuota(p.visitQuota.toString());
-    setEditHasExpiry(p.hasExpiry ?? true);
+    setEditTier(p.tier ?? "silver");
+    setEditPrice(p.price?.toString() ?? "");
+    setEditVisitQuota(p.visitQuota?.toString() ?? "");
+    setEditBlendingFee(p.blendingFeePerSession?.toString() ?? "");
+    setEditHasExpiry(p.hasExpiry ?? false);
     setEditDurationDays(p.durationDays?.toString() ?? "");
     setEditBenefits((p.benefits ?? []).join("\n"));
   }
 
   async function saveEdit() {
-    if (!editId || !editName || !editPrice || !editVisitQuota) return;
+    if (!editId || !editName) return;
+    if (editPlanType === "regular" && (!editPrice || !editVisitQuota)) return;
+    if (editPlanType === "locker" && !editBlendingFee) return;
     if (editHasExpiry && !editDurationDays) return;
     setEditSaving(true);
     try {
-      await updateDoc(doc(firebaseDb(), planPath(editId)), {
+      const base = {
         name: editName.trim(),
-        tier: editTier,
-        price: parseFloat(editPrice),
-        visitQuota: parseInt(editVisitQuota, 10),
         hasExpiry: editHasExpiry,
         durationDays: editHasExpiry ? parseInt(editDurationDays, 10) : null,
         benefits: editBenefits.split("\n").map((s) => s.trim()).filter(Boolean),
         updatedAt: new Date().toISOString(),
-      });
+      };
+      const extra = editPlanType === "locker"
+        ? { visitQuota: editVisitQuota ? parseInt(editVisitQuota, 10) : 0, blendingFeePerSession: parseFloat(editBlendingFee) }
+        : { tier: editTier, price: parseFloat(editPrice), visitQuota: parseInt(editVisitQuota, 10) };
+      await updateDoc(doc(firebaseDb(), planPath(editId)), { ...base, ...extra });
       setEditId(null);
       loadPlans();
     } catch (err) {
@@ -181,12 +209,25 @@ export default function MembershipPage() {
     setConfirmLoading(true);
     try {
       if (type === "deactivate") {
-        await updateDoc(doc(firebaseDb(), planPath(plan.id)), {
-          isActive: !plan.isActive,
-          updatedAt: new Date().toISOString(),
-        });
+        if (plan.isActive) {
+          // Deactivate via CF — writes notifications to affected customers
+          await callFunction("membership_deactivatePlan", { ownerId, clubId, planId: plan.id });
+        } else {
+          // Re-activate is a simple toggle, no cascade needed
+          await updateDoc(doc(firebaseDb(), planPath(plan.id)), {
+            isActive: true,
+            updatedAt: new Date().toISOString(),
+          });
+        }
       } else {
-        await deleteDoc(doc(firebaseDb(), planPath(plan.id)));
+        // Delete via CF — cancels memberships, clears customer IDs, writes notifications
+        await callFunction("membership_deletePlan", {
+          ownerId,
+          clubId,
+          planId: plan.id,
+          requestId: uuidv4(),
+          operationId: uuidv4(),
+        });
       }
       setConfirmDialog(null);
       loadPlans();
@@ -228,18 +269,36 @@ export default function MembershipPage() {
                 <div className="bg-green-50 rounded-xl px-4 py-3">
                   <p className="text-sm text-green-700">Tidak ada customer yang terdampak.</p>
                 </div>
-              ) : (
-                <div className="border border-amber-200 rounded-xl overflow-hidden">
-                  <div className="bg-amber-50 px-4 py-2 flex justify-between text-xs font-semibold text-amber-700">
-                    <span>{confirmDialog.customers.length} customer terdampak</span>
+              ) : confirmDialog.type === "delete" ? (
+                <div className="space-y-2">
+                  <div className="bg-red-50 rounded-xl px-4 py-3">
+                    <p className="text-sm font-semibold text-red-700">Membership {confirmDialog.customers.length} customer akan langsung dibatalkan dan sisa kunjungan hangus.</p>
                   </div>
-                  <div className="divide-y divide-slate-100 max-h-48 overflow-y-auto">
-                    {confirmDialog.customers.map((c) => (
-                      <div key={c.id} className="flex items-center justify-between px-4 py-2.5">
-                        <span className="text-sm text-slate-800 font-medium">{c.displayName}</span>
-                        <span className="text-xs text-slate-400">{c.visitRemaining} kunjungan tersisa</span>
-                      </div>
-                    ))}
+                  <div className="border border-red-200 rounded-xl overflow-hidden">
+                    <div className="divide-y divide-slate-100 max-h-40 overflow-y-auto">
+                      {confirmDialog.customers.map((c) => (
+                        <div key={c.id} className="flex items-center justify-between px-4 py-2.5">
+                          <span className="text-sm text-slate-800 font-medium">{c.displayName}</span>
+                          <span className="text-xs text-red-400 font-semibold">{c.visitRemaining} kunjungan hangus</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="bg-amber-50 rounded-xl px-4 py-3">
+                    <p className="text-sm text-amber-700">Paket tidak bisa dibeli lagi. Sisa kunjungan customer <span className="font-semibold">tetap berlaku</span> sampai habis.</p>
+                  </div>
+                  <div className="border border-amber-200 rounded-xl overflow-hidden">
+                    <div className="divide-y divide-slate-100 max-h-40 overflow-y-auto">
+                      {confirmDialog.customers.map((c) => (
+                        <div key={c.id} className="flex items-center justify-between px-4 py-2.5">
+                          <span className="text-sm text-slate-800 font-medium">{c.displayName}</span>
+                          <span className="text-xs text-slate-400">{c.visitRemaining} kunjungan tersisa</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
@@ -296,36 +355,65 @@ export default function MembershipPage() {
                     {active.map((p) =>
                       editId === p.id ? (
                         /* Inline edit card */
-                        <div key={p.id} className="bg-blue-50 rounded-xl border-2 border-blue-300 p-4 space-y-2">
+                        <div key={p.id} className={`rounded-xl border-2 p-4 space-y-2 ${editPlanType === "locker" ? "bg-purple-50 border-purple-300" : "bg-blue-50 border-blue-300"}`}>
                           <input
-                            className="w-full border border-blue-300 rounded-lg px-2 py-1.5 text-sm font-semibold"
+                            className={`w-full border rounded-lg px-2 py-1.5 text-sm font-semibold ${editPlanType === "locker" ? "border-purple-300" : "border-blue-300"}`}
                             value={editName}
                             onChange={(e) => setEditName(e.target.value)}
                             placeholder="Nama paket"
                           />
-                          <div className="grid grid-cols-2 gap-2">
-                            <select
-                              className="border border-blue-300 rounded px-2 py-1 text-xs"
-                              value={editTier}
-                              onChange={(e) => setEditTier(e.target.value as Tier)}
-                            >
-                              {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
-                            </select>
-                            <input
-                              type="number"
-                              className="border border-blue-300 rounded px-2 py-1 text-xs"
-                              value={editPrice}
-                              onChange={(e) => setEditPrice(e.target.value)}
-                              placeholder="Harga"
-                            />
-                          </div>
-                          <input
-                            type="number"
-                            className="border border-blue-300 rounded px-2 py-1 text-xs w-full"
-                            value={editVisitQuota}
-                            onChange={(e) => setEditVisitQuota(e.target.value)}
-                            placeholder="Kuota kunjungan"
-                          />
+                          {editPlanType === "locker" ? (
+                            <div className="space-y-1.5">
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  className="border border-purple-300 rounded px-2 py-1 text-xs"
+                                  value={editVisitQuota}
+                                  onChange={(e) => setEditVisitQuota(e.target.value)}
+                                  placeholder="Jumlah kunjungan"
+                                />
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={1000}
+                                  className="border border-purple-300 rounded px-2 py-1 text-xs"
+                                  value={editBlendingFee}
+                                  onChange={(e) => setEditBlendingFee(e.target.value)}
+                                  placeholder="Biaya / sesi (Rp)"
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="grid grid-cols-2 gap-2">
+                                <select
+                                  className="border border-blue-300 rounded px-2 py-1 text-xs"
+                                  value={editTier}
+                                  onChange={(e) => setEditTier(e.target.value as Tier)}
+                                >
+                                  {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+                                </select>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={1000}
+                                  className="border border-blue-300 rounded px-2 py-1 text-xs"
+                                  value={editPrice}
+                                  onChange={(e) => setEditPrice(e.target.value)}
+                                  placeholder="Harga"
+                                />
+                              </div>
+                              <input
+                                type="number"
+                                className="border border-blue-300 rounded px-2 py-1 text-xs w-full"
+                                value={editVisitQuota}
+                                onChange={(e) => setEditVisitQuota(e.target.value)}
+                                placeholder="Kuota kunjungan"
+                              />
+                            </>
+                          )}
                           <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
                             <input
                               type="checkbox"
@@ -338,7 +426,7 @@ export default function MembershipPage() {
                           {editHasExpiry && (
                             <input
                               type="number"
-                              className="border border-blue-300 rounded px-2 py-1 text-xs w-full"
+                              className={`border rounded px-2 py-1 text-xs w-full ${editPlanType === "locker" ? "border-purple-300" : "border-blue-300"}`}
                               value={editDurationDays}
                               onChange={(e) => setEditDurationDays(e.target.value)}
                               placeholder="Durasi (hari)"
@@ -346,7 +434,7 @@ export default function MembershipPage() {
                           )}
                           <textarea
                             rows={2}
-                            className="w-full border border-blue-300 rounded px-2 py-1 text-xs resize-none"
+                            className={`w-full border rounded px-2 py-1 text-xs resize-none ${editPlanType === "locker" ? "border-purple-300" : "border-blue-300"}`}
                             value={editBenefits}
                             onChange={(e) => setEditBenefits(e.target.value)}
                             placeholder="Benefit (satu per baris)"
@@ -355,7 +443,7 @@ export default function MembershipPage() {
                             <button
                               onClick={saveEdit}
                               disabled={editSaving}
-                              className="flex-1 bg-blue-600 text-white rounded-lg py-1.5 text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
+                              className={`flex-1 text-white rounded-lg py-1.5 text-xs font-semibold disabled:opacity-50 ${editPlanType === "locker" ? "bg-purple-600 hover:bg-purple-700" : "bg-blue-600 hover:bg-blue-700"}`}
                             >
                               {editSaving ? "…" : "Simpan"}
                             </button>
@@ -369,22 +457,40 @@ export default function MembershipPage() {
                         </div>
                       ) : (
                         /* Normal plan card */
-                        <div key={p.id} className="bg-white rounded-xl border border-slate-200 p-5">
+                        <div key={p.id} className={`rounded-xl border p-5 ${p.planType === "locker" ? "bg-purple-50 border-purple-200" : "bg-white border-slate-200"}`}>
                           <div className="flex items-center gap-2 mb-3">
-                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${TIER_COLORS[p.tier]}`}>
-                              {p.tier}
-                            </span>
+                            {p.planType === "locker" ? (
+                              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-purple-200 text-purple-800">LOKER</span>
+                            ) : (
+                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${TIER_COLORS[p.tier]}`}>
+                                {p.tier}
+                              </span>
+                            )}
                           </div>
                           <h4 className="font-semibold text-slate-800 mb-1">{p.name}</h4>
-                          <p className="text-xl font-bold text-slate-900 mb-3">{fmt(p.price)}</p>
+                          {p.planType === "locker" ? (
+                            <p className="text-xl font-bold text-purple-700 mb-3">{fmt(p.blendingFeePerSession ?? 0)}<span className="text-sm font-normal text-slate-400"> / sesi</span></p>
+                          ) : (
+                            <p className="text-xl font-bold text-slate-900 mb-3">{fmt(p.price)}</p>
+                          )}
                           <div className="text-xs text-slate-500 space-y-1 mb-4">
-                            <p>
-                              {p.visitQuota} kunjungan
-                              {" · "}
-                              {p.hasExpiry && p.durationDays
-                                ? `${p.durationDays} hari`
-                                : <span className="text-green-600 font-medium">Tidak ada expired</span>}
-                            </p>
+                            {p.planType === "locker" ? (
+                              <p>
+                                {p.visitQuota > 0 ? `${p.visitQuota} kunjungan` : "Harian"}
+                                {" · "}
+                                {p.hasExpiry && p.durationDays
+                                  ? `${p.durationDays} hari`
+                                  : <span className="text-green-600 font-medium">Tidak ada expired</span>}
+                              </p>
+                            ) : (
+                              <p>
+                                {p.visitQuota} kunjungan
+                                {" · "}
+                                {p.hasExpiry && p.durationDays
+                                  ? `${p.durationDays} hari`
+                                  : <span className="text-green-600 font-medium">Tidak ada expired</span>}
+                              </p>
+                            )}
                             {p.benefits?.length > 0 && (
                               <ul className="mt-2 space-y-0.5">
                                 {p.benefits.map((b, i) => <li key={i}>• {b}</li>)}
@@ -473,42 +579,96 @@ export default function MembershipPage() {
               </div>
             )}
             <div className="space-y-3">
+              {/* Plan type toggle */}
+              <div className="flex gap-1 p-1 bg-slate-100 rounded-lg">
+                {(["regular", "locker"] as const).map((pt) => (
+                  <button
+                    key={pt}
+                    onClick={() => { setCreatePlanType(pt); setHasExpiry(pt === "regular"); }}
+                    className={`flex-1 py-1.5 rounded-md text-xs font-semibold transition ${
+                      createPlanType === pt
+                        ? pt === "locker" ? "bg-purple-600 text-white" : "bg-white text-slate-800 shadow-sm"
+                        : "text-slate-500"
+                    }`}
+                  >
+                    {pt === "regular" ? "Regular" : "Loker"}
+                  </button>
+                ))}
+              </div>
+
               <input
                 className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
                 placeholder="Nama Paket"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block">
-                  <span className="text-xs text-slate-500">Tier</span>
-                  <select
-                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                    value={tier}
-                    onChange={(e) => setTier(e.target.value as Tier)}
-                  >
-                    {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </label>
-                <label className="block">
-                  <span className="text-xs text-slate-500">Harga (Rp)</span>
-                  <input
-                    type="number"
-                    className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                  />
-                </label>
-              </div>
-              <label className="block">
-                <span className="text-xs text-slate-500">Kuota Kunjungan</span>
-                <input
-                  type="number"
-                  className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                  value={visitQuota}
-                  onChange={(e) => setVisitQuota(e.target.value)}
-                />
-              </label>
+
+              {createPlanType === "regular" ? (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="text-xs text-slate-500">Tier</span>
+                      <select
+                        className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                        value={tier}
+                        onChange={(e) => setTier(e.target.value as Tier)}
+                      >
+                        {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs text-slate-500">Harga (Rp)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                        value={price}
+                        onChange={(e) => setPrice(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="text-xs text-slate-500">Kuota Kunjungan</span>
+                    <input
+                      type="number"
+                      className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                      value={visitQuota}
+                      onChange={(e) => setVisitQuota(e.target.value)}
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="text-xs text-slate-500">Jumlah Kunjungan</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        className="mt-1 w-full border border-purple-300 rounded-lg px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                        value={visitQuota}
+                        onChange={(e) => setVisitQuota(e.target.value)}
+                        placeholder="Cth: 10"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs text-slate-500">Biaya / Sesi (Rp)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1000}
+                        className="mt-1 w-full border border-purple-300 rounded-lg px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+                        value={blendingFee}
+                        onChange={(e) => setBlendingFee(e.target.value)}
+                        placeholder="Cth: 5000"
+                      />
+                    </label>
+                  </div>
+                  <p className="text-xs text-purple-500">Kredit awal = jumlah kunjungan. Isi 0 = harian (bayar per sesi)</p>
+                </>
+              )}
 
               <label className="flex items-center gap-3 py-1 cursor-pointer select-none">
                 <div

@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { collection, getDocs, query, where, orderBy, doc, updateDoc } from "firebase/firestore";
+import { useEffect, useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
+import { collection, getDocs, query, where, orderBy } from "firebase/firestore";
 import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
-import { v4 as uuidv4 } from "uuid";
 
 type CustomerTier = "retail" | "ds" | "sc" | "sbQp" | "spv";
 const TIER_LABELS: Record<CustomerTier, string> = { retail: "Retail", ds: "DS", sc: "SC", sbQp: "SB-QP", spv: "SPV" };
@@ -24,28 +23,50 @@ interface Membership {
   id: string;
   customerId: string;
   planName: string;
+  planType?: "regular" | "locker";
   tier: string;
-  visitRemaining: number;
-  visitQuota: number;
-  expiresAt: string;
+  visitRemaining: number | null;
+  visitQuota: number | null;
+  expiresAt: string | null;
   status: string;
-}
-
-interface Plan {
-  id: string;
-  name: string;
-  tier: string;
-  price: number;
-  visitQuota: number;
+  blendingCredits?: number;
 }
 
 export default function CustomersPage() {
+  const router = useRouter();
   const { ownerId, clubId } = useOwnerAuthStore();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [memberships, setMemberships] = useState<Map<string, Membership>>(new Map());
-  const [plans, setPlans] = useState<Plan[]>([]);
   const [loadingList, setLoadingList] = useState(true);
-  const [selected, setSelected] = useState<Customer | null>(null);
+  const [sortKey, setSortKey] = useState<"name" | "tier" | "membership">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  const TIER_ORDER: Record<string, number> = { retail: 0, ds: 1, sc: 2, sbQp: 3, spv: 4 };
+
+  function toggleSort(key: "name" | "tier" | "membership") {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+  }
+
+  const sorted = useMemo(() => {
+    const arr = [...customers];
+    arr.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "name") {
+        cmp = a.displayName.localeCompare(b.displayName, "id");
+      } else if (sortKey === "tier") {
+        cmp = (TIER_ORDER[a.tier] ?? 0) - (TIER_ORDER[b.tier] ?? 0);
+      } else {
+        const ma = memberships.get(a.id);
+        const mb = memberships.get(b.id);
+        const na = ma ? ma.planName : "￿";
+        const nb = mb ? mb.planName : "￿";
+        cmp = na.localeCompare(nb, "id");
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return arr;
+  }, [customers, memberships, sortKey, sortDir]);
 
   // Create customer form
   const [displayName, setDisplayName] = useState("");
@@ -55,33 +76,15 @@ export default function CustomersPage() {
   const [createLoading, setCreateLoading] = useState(false);
   const [createFeedback, setCreateFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
-  // Activate membership form
-  const [activatePlanId, setActivatePlanId] = useState("");
-  const [activateLoading, setActivateLoading] = useState(false);
-  const [activateFeedback, setActivateFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
-
-  // Confirmation dialog
-  const [confirmDialog, setConfirmDialog] = useState<{
-    customer: Customer;
-    plan: Plan;
-    currentMembership: Membership | null;
-  } | null>(null);
-
-  // Change tier
-  const [changeTier, setChangeTier] = useState<CustomerTier>("retail");
-  const [tierLoading, setTierLoading] = useState(false);
-  const [tierFeedback, setTierFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
-
   async function loadData() {
     if (!ownerId || !clubId) return;
     setLoadingList(true);
     const db = firebaseDb();
     const base = `owners/${ownerId}/clubs/${clubId}`;
 
-    const [custSnap, memSnap, planSnap] = await Promise.all([
+    const [custSnap, memSnap] = await Promise.all([
       getDocs(query(collection(db, `${base}/customers`), orderBy("createdAt", "desc"))),
       getDocs(query(collection(db, `${base}/memberships`), where("status", "==", "active"))),
-      getDocs(query(collection(db, `${base}/membershipPlans`), where("isActive", "==", true))),
     ]);
 
     setCustomers(custSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer)));
@@ -92,8 +95,6 @@ export default function CustomersPage() {
       memMap.set(m.customerId, m);
     });
     setMemberships(memMap);
-
-    setPlans(planSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Plan)));
     setLoadingList(false);
   }
 
@@ -122,139 +123,16 @@ export default function CustomersPage() {
     } finally { setCreateLoading(false); }
   }
 
-  async function handleChangeTier() {
-    if (!selected || !ownerId || !clubId) return;
-    setTierLoading(true);
-    setTierFeedback(undefined);
-    try {
-      await updateDoc(
-        doc(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/customers/${selected.id}`),
-        { tier: changeTier, updatedAt: new Date().toISOString() }
-      );
-      setTierFeedback({ type: "ok", msg: `Tier diubah ke ${TIER_LABELS[changeTier]}` });
-      loadData();
-    } catch (err) {
-      setTierFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
-    } finally { setTierLoading(false); }
-  }
-
-  function handleActivate() {
-    if (!selected || !activatePlanId) {
-      setActivateFeedback({ type: "err", msg: "Pilih paket terlebih dahulu" });
-      return;
-    }
-    const plan = plans.find((p) => p.id === activatePlanId);
-    if (!plan) return;
-    const currentMembership = memberships.get(selected.id) ?? null;
-    setConfirmDialog({ customer: selected, plan, currentMembership });
-  }
-
-  async function confirmActivate() {
-    if (!confirmDialog || !ownerId || !clubId) return;
-    const { customer, plan, currentMembership } = confirmDialog;
-    setConfirmDialog(null);
-    setActivateLoading(true);
-    setActivateFeedback(undefined);
-    try {
-      if (currentMembership) {
-        await callFunction("membership_upgrade", {
-          ownerId, clubId,
-          requestId: uuidv4(),
-          operationId: uuidv4(),
-          customerId: customer.id,
-          currentMembershipId: currentMembership.id,
-          newPlanId: plan.id,
-          transactionId: uuidv4(),
-        });
-        setActivateFeedback({ type: "ok", msg: `Membership diperbarui ke ${plan.name} (+${currentMembership.visitRemaining} kunjungan carryover)` });
-      } else {
-        await callFunction("membership_activate", {
-          ownerId, clubId,
-          requestId: uuidv4(),
-          operationId: uuidv4(),
-          customerId: customer.id,
-          planId: plan.id,
-          transactionId: uuidv4(),
-        });
-        setActivateFeedback({ type: "ok", msg: `Membership ${plan.name} berhasil diaktifkan` });
-      }
-      setActivatePlanId("");
-      loadData();
-    } catch (err) {
-      setActivateFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
-    } finally { setActivateLoading(false); }
-  }
-
   const TIER_COLOR: Record<string, string> = {
     basic: "bg-slate-100 text-slate-600",
     silver: "bg-slate-200 text-slate-700",
     gold: "bg-yellow-50 text-yellow-700",
     platinum: "bg-blue-50 text-blue-700",
+    locker: "bg-purple-100 text-purple-700",
   };
-
-  const fmt = (n: number) => new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 
   return (
     <div>
-      {/* Confirmation dialog */}
-      {confirmDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">Konfirmasi Membership</h3>
-            <p className="text-sm text-slate-500 mb-5">
-              {confirmDialog.customer.displayName}
-            </p>
-
-            {confirmDialog.currentMembership ? (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 space-y-2">
-                <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide">Ganti Membership</p>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Paket saat ini</span>
-                  <span className="font-medium text-slate-700">{confirmDialog.currentMembership.planName}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Sisa kunjungan</span>
-                  <span className="font-semibold text-amber-700">{confirmDialog.currentMembership.visitRemaining} kunjungan</span>
-                </div>
-                <div className="border-t border-amber-200 pt-2 flex justify-between text-sm">
-                  <span className="text-slate-500">Paket baru</span>
-                  <span className="font-medium text-slate-700">{confirmDialog.plan.name}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-slate-500">Kuota paket baru</span>
-                  <span className="font-medium">{confirmDialog.plan.visitQuota} kunjungan</span>
-                </div>
-                <div className="flex justify-between text-sm font-semibold text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                  <span>Total kunjungan</span>
-                  <span>{confirmDialog.plan.visitQuota} + {confirmDialog.currentMembership.visitRemaining} = {confirmDialog.plan.visitQuota + confirmDialog.currentMembership.visitRemaining} kunjungan</span>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-slate-50 rounded-xl p-4 mb-5">
-                <p className="text-xs text-slate-500 mb-1">Aktivasi Pertama</p>
-                <p className="text-sm font-semibold text-slate-800">{confirmDialog.plan.name}</p>
-                <p className="text-sm text-slate-500">{confirmDialog.plan.visitQuota} kunjungan · {fmt(confirmDialog.plan.price)}</p>
-              </div>
-            )}
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => setConfirmDialog(null)}
-                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 transition"
-              >
-                Batal
-              </button>
-              <button
-                onClick={confirmActivate}
-                className="flex-1 bg-green-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-green-700 transition"
-              >
-                Ya, Aktifkan
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <h2 className="text-2xl font-bold text-slate-900 mb-6">Pelanggan</h2>
 
       <div className="flex gap-6">
@@ -276,24 +154,40 @@ export default function CustomersPage() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs">
                   <tr>
-                    <th className="px-4 py-2 text-left">Nama</th>
-                    <th className="px-4 py-2 text-left">Tier</th>
+                    {(["name", "tier"] as const).map((key) => {
+                      const label = key === "name" ? "Nama" : "Tier";
+                      const active = sortKey === key;
+                      return (
+                        <th
+                          key={key}
+                          onClick={() => toggleSort(key)}
+                          className="px-4 py-2 text-left cursor-pointer select-none hover:text-slate-700"
+                        >
+                          {label}
+                          <span className="ml-1">{active ? (sortDir === "asc" ? "↑" : "↓") : <span className="opacity-30">↕</span>}</span>
+                        </th>
+                      );
+                    })}
                     <th className="px-4 py-2 text-left">Kontak</th>
-                    <th className="px-4 py-2 text-left">Membership</th>
-                    <th className="px-4 py-2 text-right">Sisa Kunjungan</th>
+                    <th
+                      onClick={() => toggleSort("membership")}
+                      className="px-4 py-2 text-left cursor-pointer select-none hover:text-slate-700"
+                    >
+                      Membership
+                      <span className="ml-1">{sortKey === "membership" ? (sortDir === "asc" ? "↑" : "↓") : <span className="opacity-30">↕</span>}</span>
+                    </th>
+                    <th className="px-4 py-2 text-right">Sisa Kuota</th>
                     <th className="px-4 py-2 text-left">Kadaluarsa</th>
-                    <th className="px-4 py-2"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {customers.map((c) => {
+                  {sorted.map((c) => {
                     const mem = memberships.get(c.id);
-                    const isSelected = selected?.id === c.id;
                     return (
                       <tr
                         key={c.id}
-                        onClick={() => { setSelected(isSelected ? null : c); setActivateFeedback(undefined); setActivatePlanId(""); setTierFeedback(undefined); setChangeTier(c.tier ?? "retail"); }}
-                        className={`cursor-pointer hover:bg-slate-50 transition ${isSelected ? "bg-blue-50" : ""}`}
+                        onClick={() => router.push(`/customers/${c.id}`)}
+                        className="cursor-pointer hover:bg-slate-50 transition"
                       >
                         <td className="px-4 py-2.5 font-medium text-slate-800">{c.displayName}</td>
                         <td className="px-4 py-2.5">
@@ -304,7 +198,7 @@ export default function CustomersPage() {
                         <td className="px-4 py-2.5 text-slate-400 text-xs">{c.phone ?? c.email ?? "—"}</td>
                         <td className="px-4 py-2.5">
                           {mem ? (
-                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${TIER_COLOR[mem.tier] ?? "bg-slate-100 text-slate-600"}`}>
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${TIER_COLOR[mem.planType === "locker" ? "locker" : mem.tier] ?? "bg-slate-100 text-slate-600"}`}>
                               {mem.planName}
                             </span>
                           ) : (
@@ -312,15 +206,14 @@ export default function CustomersPage() {
                           )}
                         </td>
                         <td className="px-4 py-2.5 text-right font-semibold text-slate-700">
-                          {mem ? `${mem.visitRemaining} / ${mem.visitQuota}` : "—"}
+                          {mem?.planType === "locker"
+                            ? `${mem.blendingCredits ?? 0} kredit`
+                            : mem
+                            ? `${mem.visitRemaining ?? 0} / ${mem.visitQuota ?? 0}`
+                            : "—"}
                         </td>
                         <td className="px-4 py-2.5 text-slate-400 text-xs">
-                          {mem ? mem.expiresAt.slice(0, 10) : "—"}
-                        </td>
-                        <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
-                          <Link href={`/customers/${c.id}`} className="text-xs text-blue-600 hover:underline font-medium whitespace-nowrap">
-                            Detail →
-                          </Link>
+                          {mem?.expiresAt ? mem.expiresAt.slice(0, 10) : "—"}
                         </td>
                       </tr>
                     );
@@ -339,7 +232,13 @@ export default function CustomersPage() {
               </div>
             )}
             <div className="space-y-3">
-              <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Nama Lengkap *" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+              <input
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                placeholder="Nama Lengkap *"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+              />
               <div className="grid grid-cols-2 gap-3">
                 <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="No. HP (opsional)" value={phone} onChange={(e) => setPhone(e.target.value)} />
                 <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Email (opsional)" value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -352,101 +251,16 @@ export default function CustomersPage() {
                   ))}
                 </select>
               </div>
-              <button onClick={handleCreate} disabled={createLoading} className="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition">
+              <button
+                onClick={handleCreate}
+                disabled={createLoading}
+                className="w-full bg-blue-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition"
+              >
                 {createLoading ? "Menyimpan…" : "Tambah Pelanggan"}
               </button>
             </div>
           </div>
         </div>
-
-        {/* Detail panel */}
-        {selected && (
-          <div className="w-72 shrink-0">
-            <div className="bg-white rounded-xl border border-slate-200 p-6 sticky top-6">
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h3 className="font-semibold text-slate-800">{selected.displayName}</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">{selected.phone ?? selected.email ?? "Tidak ada kontak"}</p>
-                </div>
-                <button onClick={() => setSelected(null)} className="text-slate-300 hover:text-slate-500 text-lg leading-none">×</button>
-              </div>
-
-              {/* Current membership */}
-              {memberships.get(selected.id) ? (
-                <div className="bg-slate-50 rounded-lg p-3 mb-5">
-                  <p className="text-xs text-slate-500 mb-1">Membership Aktif</p>
-                  {(() => {
-                    const m = memberships.get(selected.id)!;
-                    return (
-                      <>
-                        <p className="font-semibold text-slate-800">{m.planName}</p>
-                        <p className="text-xs text-slate-500 mt-1">{m.visitRemaining} kunjungan tersisa · kadaluarsa {m.expiresAt.slice(0, 10)}</p>
-                      </>
-                    );
-                  })()}
-                </div>
-              ) : (
-                <div className="bg-amber-50 rounded-lg p-3 mb-5">
-                  <p className="text-xs text-amber-700">Belum memiliki membership aktif</p>
-                </div>
-              )}
-
-              {/* Change tier */}
-              <div className="mb-5">
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-sm font-semibold text-slate-700">Level / Tier</h4>
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                    {TIER_LABELS[selected.tier] ?? selected.tier}
-                  </span>
-                </div>
-                {tierFeedback && (
-                  <div className={`mb-2 text-xs rounded-lg px-3 py-2 ${tierFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                    {tierFeedback.msg}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <select
-                    className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                    value={changeTier}
-                    onChange={(e) => setChangeTier(e.target.value as CustomerTier)}
-                  >
-                    {(Object.entries(TIER_LABELS) as [CustomerTier, string][]).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={handleChangeTier}
-                    disabled={tierLoading || changeTier === selected.tier}
-                    className="bg-slate-700 text-white px-4 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-40 transition"
-                  >
-                    {tierLoading ? "…" : "Ubah"}
-                  </button>
-                </div>
-              </div>
-
-              {/* Activate membership */}
-              <h4 className="text-sm font-semibold text-slate-700 mb-3">Aktifkan Membership</h4>
-              {activateFeedback && (
-                <div className={`mb-3 text-xs rounded-lg px-3 py-2 ${activateFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                  {activateFeedback.msg}
-                </div>
-              )}
-              <div className="space-y-3">
-                <select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={activatePlanId} onChange={(e) => setActivatePlanId(e.target.value)}>
-                  <option value="">— Pilih Paket —</option>
-                  {plans.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name} · {fmt(p.price)}</option>
-                  ))}
-                </select>
-                <button onClick={handleActivate} disabled={activateLoading || !activatePlanId} className="w-full bg-green-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-green-700 disabled:opacity-50 transition">
-                  {activateLoading ? "Mengaktifkan…" : "Aktifkan"}
-                </button>
-              </div>
-
-              <p className="text-xs text-slate-300 mt-4 font-mono">{selected.id}</p>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

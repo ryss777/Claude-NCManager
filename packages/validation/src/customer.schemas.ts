@@ -6,10 +6,10 @@ export type CustomerTierInput = z.infer<typeof customerTierSchema>;
 
 export const createCustomerSchema = tenantRefSchema.extend({
   displayName: z.string().min(1).max(100),
-  phone: z.string().min(6).max(20).optional(),
-  email: z.string().email().optional(),
+  phone: z.string().min(6).max(20).nullish(),
+  email: z.string().email().nullish(),
   tier: customerTierSchema.default("retail"),
-  notes: z.string().max(200).optional(),
+  notes: z.string().max(200).nullish(),
 });
 
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;

@@ -6,3 +6,5 @@ export * from "./membership.schemas";
 export * from "./auth.schemas";
 export * from "./sync.schemas";
 export * from "./customer.schemas";
+export * from "./transfer.schemas";
+export * from "./debt.schemas";

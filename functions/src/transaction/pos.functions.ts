@@ -11,6 +11,7 @@ import {
 import { COLLECTIONS, ACCOUNT_CODES } from "@nc-manager/shared-constants";
 import type { AccountCode, PaymentMethod } from "@nc-manager/shared-types";
 import { writeJournalEntry } from "../finance/finance.helpers";
+import { readInventorySnaps, writeInventoryMovements, type SaleItemRef } from "../inventory/inventory.helpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -159,6 +160,7 @@ export const pos_completeTransaction = onCall(async (request) => {
   const total = txData["total"] as number;
   const shiftId = txData["shiftId"] as string;
   const membershipId = txData["membershipId"] as string | null;
+  const txItems = txData["items"] as SaleItemRef[];
   const now = new Date().toISOString();
 
   const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
@@ -170,6 +172,9 @@ export const pos_completeTransaction = onCall(async (request) => {
   const accounts = saleAccounts(paymentMethod);
 
   await db.runTransaction(async (tx) => {
+    // Pre-read inventory items before any writes
+    const invSnaps = await readInventorySnaps(tx, ownerId, clubId, txItems);
+
     // 1. Update transaction status
     tx.update(txRef, {
       status: "completed",
@@ -237,6 +242,20 @@ export const pos_completeTransaction = onCall(async (request) => {
       }
     }
 
+    // 5. Deduct inventory stock for each sold item
+    writeInventoryMovements(tx, {
+      ownerId,
+      clubId,
+      items: txItems,
+      invSnaps,
+      transactionId,
+      baseOperationId: operationId,
+      operatorId,
+      requestId: txData["requestId"] as string,
+      now,
+      movementType: "sale",
+    });
+
     await markOperationComplete(tx, operationId, idempotencyPath, { transactionId });
   });
 
@@ -276,11 +295,15 @@ export const pos_reverseTransaction = onCall(async (request) => {
   const total = txData["total"] as number;
   const shiftId = txData["shiftId"] as string;
   const membershipId = txData["membershipId"] as string | null;
+  const txItems = txData["items"] as SaleItemRef[];
   const now = new Date().toISOString();
   const reversalAccs = reversalAccounts(paymentMethod);
   const shiftRef = db.collection(COLLECTIONS.SHIFTS(ownerId, clubId)).doc(shiftId);
 
   await db.runTransaction(async (tx) => {
+    // Pre-read inventory items before any writes
+    const invSnaps = await readInventorySnaps(tx, ownerId, clubId, txItems);
+
     // 1. Mark original transaction as reversed
     tx.update(txRef, {
       status: "reversed",
@@ -326,6 +349,20 @@ export const pos_reverseTransaction = onCall(async (request) => {
         });
       }
     }
+
+    // 5. Restore inventory stock (return items to shelf)
+    writeInventoryMovements(tx, {
+      ownerId,
+      clubId,
+      items: txItems,
+      invSnaps,
+      transactionId,
+      baseOperationId: operationId,
+      operatorId: request.auth!.uid,
+      requestId: payload.requestId,
+      now,
+      movementType: "reversal",
+    });
 
     await markOperationComplete(tx, operationId, idempotencyPath, { transactionId });
   });

@@ -6,11 +6,15 @@ export type JournalEntryType =
   | "adjustment"
   | "membership_payment"
   | "cash_in"
-  | "cash_out";
+  | "cash_out"
+  | "stock_purchase"
+  | "stock_transfer"
+  | "debt_payment";
 
 export type AccountCode =
   | "1001" // Cash
   | "1002" // Member Balance
+  | "1003" // Accounts Receivable
   | "4001" // Sales Revenue
   | "4002" // Membership Revenue
   | "5001" // COGS
@@ -27,7 +31,7 @@ export interface JournalEntry {
   creditAccount: AccountCode;
   description: string;
   referenceId?: string;
-  referenceType?: "transaction" | "shift" | "membership" | "manual";
+  referenceType?: "transaction" | "shift" | "membership" | "manual" | "replenishment" | "debt";
   shiftId?: string;
   operatorId?: string;
   requestId: string;

@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onCall } from "firebase-functions/v2/https";
 import { db } from "../utils/admin";
 import { validatePayload, requireRole } from "../utils/validate";
 import { checkIdempotency, throwIfDuplicate, markOperationComplete } from "../utils/idempotency";
@@ -6,6 +6,7 @@ import { ownerSaleSchema } from "@nc-manager/validation";
 import { COLLECTIONS, ACCOUNT_CODES } from "@nc-manager/shared-constants";
 import type { AccountCode } from "@nc-manager/shared-types";
 import { writeJournalEntry } from "../finance/finance.helpers";
+import { readInventorySnaps, writeInventoryMovements } from "../inventory/inventory.helpers";
 
 // ── pos_ownerSale ─────────────────────────────────────────────────────────────
 //
@@ -25,17 +26,23 @@ export const pos_ownerSale = onCall(async (request) => {
   const subtotal = payload.items.reduce((sum, item) => sum + item.subtotal, 0);
   const discount = payload.discount ?? 0;
   const total = subtotal - discount;
-  const change = payload.amountPaid - total;
+  const amountPaid = payload.amountPaid;
+  const change = amountPaid - total;
+  const remainingDebt = Math.max(0, total - amountPaid);
+  const hasDebt = remainingDebt > 0;
+  const customerId = payload.customerId ?? null;
   const now = new Date().toISOString();
 
-  const debitAccount: AccountCode =
-    payload.paymentMethod === "transfer"
-      ? (ACCOUNT_CODES.CASH as AccountCode)   // treat transfer as cash for journal
-      : (ACCOUNT_CODES.CASH as AccountCode);
-
   const txRef = db.collection(COLLECTIONS.TRANSACTIONS(ownerId, clubId)).doc();
+  const debtRef = hasDebt ? db.collection(COLLECTIONS.DEBTS(ownerId, clubId)).doc() : null;
+
+  const itemLabel = payload.items.length === 1
+    ? payload.items[0]!.productName
+    : `${payload.items.length} produk`;
 
   await db.runTransaction(async (tx) => {
+    const invSnaps = await readInventorySnaps(tx, ownerId, clubId, payload.items);
+
     tx.set(txRef, {
       id: txRef.id,
       ownerId,
@@ -43,15 +50,16 @@ export const pos_ownerSale = onCall(async (request) => {
       operatorId: null,
       deviceId: null,
       shiftId: null,
-      customerId: payload.customerId ?? null,
+      customerId,
       membershipId: null,
       items: payload.items,
       subtotal,
       discount,
       total,
       paymentMethod: payload.paymentMethod,
-      amountPaid: payload.amountPaid,
+      amountPaid,
       change,
+      debtId: debtRef?.id ?? null,
       notes: payload.notes ?? null,
       status: "completed",
       requestId: payload.requestId,
@@ -64,25 +72,72 @@ export const pos_ownerSale = onCall(async (request) => {
       createdBy: "owner",
     });
 
-    writeJournalEntry(tx, {
-      ownerId,
-      clubId,
-      entryType: "sale",
-      amount: total,
-      debitAccount,
-      creditAccount: ACCOUNT_CODES.SALES_REVENUE as AccountCode,
-      description: `Owner sale — transaction ${txRef.id}${payload.notes ? ` (${payload.notes})` : ""}`,
-      requestId: payload.requestId,
-      operationId,
-      referenceId: txRef.id,
-      referenceType: "transaction",
+    if (amountPaid > 0) {
+      writeJournalEntry(tx, {
+        ownerId, clubId,
+        entryType: "sale",
+        amount: amountPaid,
+        debitAccount: ACCOUNT_CODES.CASH as AccountCode,
+        creditAccount: ACCOUNT_CODES.SALES_REVENUE as AccountCode,
+        description: `Owner sale — ${itemLabel}${payload.notes ? ` (${payload.notes})` : ""}`,
+        requestId: payload.requestId,
+        operationId,
+        referenceId: txRef.id,
+        referenceType: "transaction",
+        operatorId: request.auth!.uid,
+      });
+    }
+
+    if (hasDebt) {
+      writeJournalEntry(tx, {
+        ownerId, clubId,
+        entryType: "sale",
+        amount: remainingDebt,
+        debitAccount: ACCOUNT_CODES.ACCOUNTS_RECEIVABLE as AccountCode,
+        creditAccount: ACCOUNT_CODES.SALES_REVENUE as AccountCode,
+        description: `Piutang penjualan — ${itemLabel} untuk ${customerId}`,
+        requestId: payload.requestId,
+        operationId: `${operationId}_ar`,
+        referenceId: txRef.id,
+        referenceType: "transaction",
+        operatorId: request.auth!.uid,
+      });
+
+      tx.set(debtRef!, {
+        id: debtRef!.id,
+        ownerId, clubId, customerId,
+        source: "pos",
+        referenceId: txRef.id,
+        referenceLabel: itemLabel,
+        totalAmount: total,
+        paidAmount: amountPaid,
+        remainingAmount: remainingDebt,
+        status: amountPaid > 0 ? "partial" : "unpaid",
+        payments: amountPaid > 0
+          ? [{ amount: amountPaid, paymentMethod: payload.paymentMethod, notes: null, paidAt: now }]
+          : [],
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    writeInventoryMovements(tx, {
+      ownerId, clubId,
+      items: payload.items,
+      invSnaps,
+      transactionId: txRef.id,
+      baseOperationId: operationId,
       operatorId: request.auth!.uid,
+      requestId: payload.requestId,
+      now,
+      movementType: "sale",
     });
 
     await markOperationComplete(tx, operationId, idempotencyPath, {
       transactionId: txRef.id,
+      debtId: debtRef?.id ?? null,
     });
   });
 
-  return { transactionId: txRef.id, total, change };
+  return { transactionId: txRef.id, total, change, debtId: debtRef?.id ?? null, remainingDebt };
 });

@@ -29,6 +29,11 @@ Thumbs.db
 .vscode/settings.json
 .idea/
 
+# Build artifacts
+functions-bundle/
+functions-deploy/
+*.tsbuildinfo
+
 # Logs
 *.log
 npm-debug.log*

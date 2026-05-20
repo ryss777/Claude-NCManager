@@ -37,6 +37,7 @@ interface Plan {
 interface Membership {
   id: string;
   planName: string;
+  planType?: "regular" | "locker";
   tier: string;
   status: string;
   visitRemaining: number;
@@ -44,6 +45,8 @@ interface Membership {
   visitQuota: number;
   expiresAt: string | null;
   activatedAt: string;
+  blendingCredits?: number;
+  blendingFeePerSession?: number;
 }
 
 const TIER_COLOR: Record<string, { bg: string; text: string; border: string }> = {
@@ -86,6 +89,11 @@ export default function MembershipScreen() {
   // Loading states
   const [activating, setActivating] = useState(false);
   const [checkingIn, setCheckingIn] = useState(false);
+
+  // Locker visit recording
+  const [lockerGuestCount, setLockerGuestCount] = useState(1);
+  const [lockerPayType, setLockerPayType] = useState<"credits" | "cash">("credits");
+  const [recordingVisit, setRecordingVisit] = useState(false);
 
   const filteredCustomers =
     customerSearch.length >= 2
@@ -243,6 +251,51 @@ export default function MembershipScreen() {
     );
   }
 
+  async function handleLockerVisit() {
+    if (!selectedCustomer || !membership || !ownerId || !clubId) return;
+
+    const fee = membership.blendingFeePerSession ?? 0;
+    const totalCharge = lockerPayType === "cash" ? lockerGuestCount * fee : 0;
+    const creditsAfter = lockerPayType === "credits"
+      ? (membership.blendingCredits ?? 0) - lockerGuestCount
+      : membership.blendingCredits ?? 0;
+
+    const confirmMsg = lockerPayType === "credits"
+      ? `${lockerGuestCount} tamu — potong ${lockerGuestCount} kredit\nSisa: ${creditsAfter} kredit`
+      : `${lockerGuestCount} tamu — bayar tunai Rp ${totalCharge.toLocaleString("id-ID")}`;
+
+    Alert.alert("Konfirmasi Kunjungan Blender", confirmMsg, [
+      { text: "Batal", style: "cancel" },
+      {
+        text: "Catat",
+        onPress: async () => {
+          setRecordingVisit(true);
+          try {
+            const result = await callableFn("locker_recordVisit", {
+              ownerId, clubId,
+              operationId: uuidv4(),
+              requestId: uuidv4(),
+              membershipId: membership.id,
+              customerId: selectedCustomer.id,
+              guestCount: lockerGuestCount,
+              paymentType: lockerPayType,
+            }) as { creditsAfter: number; guestCount: number };
+
+            const msg = lockerPayType === "credits"
+              ? `Kredit terpotong ${result.guestCount}. Sisa: ${result.creditsAfter} sesi`
+              : `Kunjungan dicatat. Tagih Rp ${totalCharge.toLocaleString("id-ID")}`;
+            Alert.alert("Berhasil ✓", msg);
+            loadActiveMembership(selectedCustomer.id);
+          } catch (err) {
+            Alert.alert("Gagal", err instanceof Error ? err.message : "Terjadi kesalahan");
+          } finally {
+            setRecordingVisit(false);
+          }
+        },
+      },
+    ]);
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -309,9 +362,78 @@ export default function MembershipScreen() {
               <View style={styles.noMembership}>
                 <Text style={styles.noMembershipText}>Belum punya membership aktif</Text>
               </View>
+            ) : membership.planType === "locker" ? (
+              <View>
+                {/* Locker card */}
+                <View style={styles.lockerCard}>
+                  <View style={styles.membershipCardHeader}>
+                    <Text style={styles.lockerBadge}>LOKER</Text>
+                    <Text style={styles.membershipPlanName}>{membership.planName}</Text>
+                  </View>
+                  <View style={styles.lockerCreditsRow}>
+                    <Text style={styles.lockerCreditsLabel}>Kredit Sesi</Text>
+                    <Text style={styles.lockerCreditsValue}>{membership.blendingCredits ?? 0}</Text>
+                  </View>
+                  <Text style={styles.lockerFeeText}>
+                    Rp {(membership.blendingFeePerSession ?? 0).toLocaleString("id-ID")} / sesi
+                    {membership.expiresAt ? `  ·  s/d ${membership.expiresAt.slice(0, 10)}` : ""}
+                  </Text>
+                </View>
+
+                {/* Guest count + pay type */}
+                <View style={styles.lockerControls}>
+                  <Text style={styles.lockerControlLabel}>Jumlah Tamu</Text>
+                  <View style={styles.guestCountRow}>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <TouchableOpacity
+                        key={n}
+                        style={[styles.guestBtn, lockerGuestCount === n && styles.guestBtnActive]}
+                        onPress={() => setLockerGuestCount(n)}
+                      >
+                        <Text style={[styles.guestBtnText, lockerGuestCount === n && styles.guestBtnTextActive]}>
+                          {n}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <View style={styles.paymentRow}>
+                    {(["credits", "cash"] as const).map((pt) => (
+                      <TouchableOpacity
+                        key={pt}
+                        style={[styles.payBtn, lockerPayType === pt && styles.payBtnActive]}
+                        onPress={() => setLockerPayType(pt)}
+                      >
+                        <Text style={[styles.payBtnText, lockerPayType === pt && styles.payBtnTextActive]}>
+                          {pt === "credits" ? "Kredit" : "Tunai"}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={[
+                    styles.checkInBtn,
+                    { backgroundColor: "#9333ea" },
+                    (recordingVisit || (lockerPayType === "credits" && (membership.blendingCredits ?? 0) < lockerGuestCount)) && styles.disabledBtn,
+                  ]}
+                  onPress={handleLockerVisit}
+                  disabled={recordingVisit || (lockerPayType === "credits" && (membership.blendingCredits ?? 0) < lockerGuestCount)}
+                >
+                  {recordingVisit ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.checkInBtnText}>
+                      {lockerPayType === "credits" && (membership.blendingCredits ?? 0) < lockerGuestCount
+                        ? "Kredit Tidak Cukup"
+                        : `Catat ${lockerGuestCount} Tamu — ${lockerPayType === "credits" ? `${lockerGuestCount} Kredit` : `Rp ${(lockerGuestCount * (membership.blendingFeePerSession ?? 0)).toLocaleString("id-ID")}`}`}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             ) : (
               <View>
-                {/* Membership card */}
+                {/* Regular membership card */}
                 <View style={[
                   styles.membershipCard,
                   { borderColor: TIER_COLOR[membership.tier]?.border ?? "#e2e8f0" },
@@ -323,14 +445,12 @@ export default function MembershipScreen() {
                     </Text>
                     <Text style={styles.membershipPlanName}>{membership.planName}</Text>
                   </View>
-
-                  {/* Visit bar */}
                   <View style={styles.visitBarWrap}>
                     <View style={styles.visitBarBg}>
                       <View
                         style={[
                           styles.visitBarFill,
-                          { width: `${Math.min((membership.visitRemaining / membership.visitQuota) * 100, 100)}%` },
+                          { width: `${Math.min(((membership.visitRemaining ?? 0) / (membership.visitQuota || 1)) * 100, 100)}%` },
                         ]}
                       />
                     </View>
@@ -338,17 +458,11 @@ export default function MembershipScreen() {
                       {membership.visitRemaining} / {membership.visitQuota} kunjungan tersisa
                     </Text>
                   </View>
-
                   <View style={styles.membershipMeta}>
                     {membership.expiresAt ? (
                       <>
-                        <Text style={styles.metaText}>
-                          Berlaku s/d {membership.expiresAt.slice(0, 10)}
-                        </Text>
-                        <Text style={[
-                          styles.daysLeft,
-                          (daysLeft(membership.expiresAt) ?? 99) <= 7 && styles.daysLeftWarning,
-                        ]}>
+                        <Text style={styles.metaText}>Berlaku s/d {membership.expiresAt.slice(0, 10)}</Text>
+                        <Text style={[styles.daysLeft, (daysLeft(membership.expiresAt) ?? 99) <= 7 && styles.daysLeftWarning]}>
                           {daysLeft(membership.expiresAt)} hari lagi
                         </Text>
                       </>
@@ -357,21 +471,16 @@ export default function MembershipScreen() {
                     )}
                   </View>
                 </View>
-
-                {/* Check-in button */}
                 <TouchableOpacity
-                  style={[
-                    styles.checkInBtn,
-                    (membership.visitRemaining <= 0 || checkingIn) && styles.disabledBtn,
-                  ]}
+                  style={[styles.checkInBtn, ((membership.visitRemaining ?? 0) <= 0 || checkingIn) && styles.disabledBtn]}
                   onPress={handleCheckIn}
-                  disabled={membership.visitRemaining <= 0 || checkingIn}
+                  disabled={(membership.visitRemaining ?? 0) <= 0 || checkingIn}
                 >
                   {checkingIn ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
                     <Text style={styles.checkInBtnText}>
-                      {membership.visitRemaining <= 0 ? "Kuota Habis" : "✓ Check-in Kunjungan"}
+                      {(membership.visitRemaining ?? 0) <= 0 ? "Kuota Habis" : "✓ Check-in Kunjungan"}
                     </Text>
                   )}
                 </TouchableOpacity>
