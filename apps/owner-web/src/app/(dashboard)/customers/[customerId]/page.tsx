@@ -88,18 +88,6 @@ interface Debt {
   updatedAt: string;
 }
 
-interface Plan {
-  id: string;
-  name: string;
-  planType?: "regular" | "locker";
-  tier: string;
-  price: number;
-  visitQuota: number;
-  durationDays: number | null;
-  hasExpiry: boolean;
-  blendingFeePerSession?: number;
-}
-
 type Tab = "membership" | "transactions" | "visits" | "debts";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -145,7 +133,6 @@ export default function CustomerDetailPage() {
   const [memberships, setMemberships]   = useState<Membership[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [visits, setVisits]             = useState<Visit[]>([]);
-  const [plans, setPlans]               = useState<Plan[]>([]);
   const [debts, setDebts]               = useState<Debt[]>([]);
   const [loading, setLoading]           = useState(true);
   const [tab, setTab]                   = useState<Tab>("membership");
@@ -164,18 +151,6 @@ export default function CustomerDetailPage() {
     () => memberships.find((m) => m.status === "pending_next") ?? null,
     [memberships]
   );
-
-  // Activate / upgrade form
-  const [selectedPlanId, setSelectedPlanId] = useState("");
-  const [activating, setActivating]         = useState(false);
-  const [activateFeedback, setActivateFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
-
-  // Confirmation dialog for plan switch
-  const [switchConfirm, setSwitchConfirm] = useState<{
-    newPlan: Plan;
-    blocked: boolean;   // true = masih ada sisa kunjungan, hanya tampil info
-    remaining: number;
-  } | null>(null);
 
   // Edit profile
   const [editOpen, setEditOpen]     = useState(false);
@@ -211,12 +186,11 @@ export default function CustomerDetailPage() {
       const db = firebaseDb();
       const base = `owners/${ownerId}/clubs/${clubId}`;
 
-      const [custSnap, memSnap, txSnap, visitSnap, planSnap] = await Promise.all([
+      const [custSnap, memSnap, txSnap, visitSnap] = await Promise.all([
         getDoc(doc(db, `${base}/customers/${customerId}`)),
         getDocs(query(collection(db, `${base}/memberships`), where("customerId", "==", customerId), limit(20))),
         getDocs(query(collection(db, `${base}/transactions`), where("customerId", "==", customerId), limit(50))),
         getDocs(query(collection(db, `${base}/membershipVisits`), where("customerId", "==", customerId), limit(50))),
-        getDocs(query(collection(db, `${base}/membershipPlans`), where("isActive", "==", true))),
       ]);
 
       if (!custSnap.exists()) return;
@@ -243,8 +217,6 @@ export default function CustomerDetailPage() {
           .map((d) => ({ id: d.id, ...(d.data() as Omit<Visit, "id">) }))
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       );
-      setPlans(planSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Plan, "id">) })));
-
       // Debts loaded separately — a missing rules entry won't block the page
       try {
         const debtSnap = await getDocs(
@@ -328,27 +300,6 @@ export default function CustomerDetailPage() {
     }
   }
 
-  function handleActivateClick() {
-    if (!selectedPlanId) {
-      setActivateFeedback({ type: "err", msg: "Pilih paket terlebih dahulu" });
-      return;
-    }
-    const plan = plans.find((p) => p.id === selectedPlanId)!;
-
-    if (pendingNext) {
-      // Already has a queued plan — block
-      setSwitchConfirm({ newPlan: plan, blocked: true, remaining: -1 });
-      return;
-    }
-
-    const remaining = activeMembership
-      ? (activeMembership.planType === "locker"
-          ? (activeMembership.blendingCredits ?? 0)
-          : (activeMembership.visitRemaining ?? 0))
-      : 0;
-    setSwitchConfirm({ newPlan: plan, blocked: false, remaining });
-  }
-
   async function handleLockerTopUp() {
     if (!activeMembership || !ownerId || !clubId) return;
     const sessions = parseInt(topUpSessions);
@@ -374,32 +325,6 @@ export default function CustomerDetailPage() {
     } finally {
       setTopUpLoading(false);
     }
-  }
-
-  async function confirmSwitch() {
-    if (!switchConfirm || switchConfirm.blocked) return;
-    const plan = switchConfirm.newPlan;
-    const willQueue = switchConfirm.remaining > 0;
-    setSwitchConfirm(null);
-    setActivating(true);
-    setActivateFeedback(undefined);
-    try {
-      await callFunction("membership_activate", {
-        ownerId, clubId,
-        requestId: uuidv4(), operationId: uuidv4(),
-        customerId, planId: plan.id, transactionId: uuidv4(),
-      });
-      setActivateFeedback({
-        type: "ok",
-        msg: willQueue
-          ? `${plan.name} dijadwalkan — akan aktif otomatis setelah kuota habis`
-          : `${plan.name} berhasil diaktifkan`,
-      });
-      setSelectedPlanId("");
-      loadAll();
-    } catch (err) {
-      setActivateFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal" });
-    } finally { setActivating(false); }
   }
 
   if (loading) {
@@ -433,142 +358,6 @@ export default function CustomerDetailPage() {
 
   return (
     <div>
-      {/* Edit profile dialog */}
-      {/* Switch confirmation / blocked dialog */}
-      {switchConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
-            {switchConfirm.blocked ? (
-              /* Already has a pending_next — block */
-              <>
-                <div className="flex items-start gap-3 mb-4">
-                  <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
-                    <span className="text-lg">⚠️</span>
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900">Sudah Ada Paket Antrian</h3>
-                    <p className="text-sm text-slate-500 mt-0.5">{customer?.displayName}</p>
-                  </div>
-                </div>
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5">
-                  <p className="text-sm font-semibold text-amber-800 mb-1">{pendingNext?.planName}</p>
-                  <p className="text-sm text-amber-700">
-                    Paket di atas sudah menunggu giliran. Hanya boleh ada satu antrian paket.
-                  </p>
-                </div>
-                <button
-                  onClick={() => setSwitchConfirm(null)}
-                  className="w-full bg-slate-700 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-800 transition"
-                >
-                  Mengerti
-                </button>
-              </>
-            ) : switchConfirm.remaining > 0 ? (
-              /* Active membership still has quota — will be queued */
-              <>
-                <div className="flex items-start gap-3 mb-4">
-                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                    <span className="text-lg">📋</span>
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900">Jadwalkan Paket Berikutnya</h3>
-                    <p className="text-sm text-slate-500 mt-0.5">{customer?.displayName}</p>
-                  </div>
-                </div>
-                <div className="bg-slate-50 rounded-xl p-3 mb-3 text-sm">
-                  <div className="flex justify-between text-slate-500 mb-1">
-                    <span>Paket aktif sekarang</span>
-                    <span className="font-medium text-slate-700">{activeMembership?.planName}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Sisa kuota</span>
-                    <span className="font-semibold text-orange-600">
-                      {activeMembership?.planType === "locker"
-                        ? `${switchConfirm.remaining} kredit`
-                        : `${switchConfirm.remaining} kunjungan`}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-2 text-sm">
-                  <div className="flex justify-between text-slate-500 mb-1">
-                    <span>Paket berikutnya</span>
-                    <span className="font-semibold text-slate-800">{switchConfirm.newPlan.name}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Kuota</span>
-                    <span className="font-medium">
-                      {switchConfirm.newPlan.planType === "locker"
-                        ? `${switchConfirm.newPlan.visitQuota > 0 ? switchConfirm.newPlan.visitQuota + " kredit" : "Harian"}`
-                        : `${switchConfirm.newPlan.visitQuota} kunjungan`}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-xs text-blue-600 mb-5">
-                  Paket ini akan otomatis aktif setelah kuota <strong>{activeMembership?.planName}</strong> habis.
-                </p>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setSwitchConfirm(null)}
-                    className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 transition"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    onClick={confirmSwitch}
-                    className="flex-1 bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-blue-700 transition"
-                  >
-                    Ya, Jadwalkan
-                  </button>
-                </div>
-              </>
-            ) : (
-              /* No active or quota = 0 — activate now */
-              <>
-                <div className="flex items-start gap-3 mb-4">
-                  <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center shrink-0">
-                    <span className="text-lg">✅</span>
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900">
-                      {activeMembership ? "Ganti Paket" : "Aktifkan Membership"}
-                    </h3>
-                    <p className="text-sm text-slate-500 mt-0.5">{customer?.displayName}</p>
-                  </div>
-                </div>
-                <div className="bg-green-50 border border-green-200 rounded-xl p-3 mb-5 text-sm">
-                  <div className="flex justify-between text-slate-500 mb-1">
-                    <span>Paket</span>
-                    <span className="font-semibold text-slate-800">{switchConfirm.newPlan.name}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Kuota</span>
-                    <span className="font-medium">
-                      {switchConfirm.newPlan.planType === "locker"
-                        ? `${switchConfirm.newPlan.visitQuota > 0 ? switchConfirm.newPlan.visitQuota + " kredit" : "Harian"}`
-                        : `${switchConfirm.newPlan.visitQuota} kunjungan`}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setSwitchConfirm(null)}
-                    className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 transition"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    onClick={confirmSwitch}
-                    className="flex-1 bg-green-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-green-700 transition"
-                  >
-                    {activeMembership ? "Ya, Ganti" : "Ya, Aktifkan"}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
       {debtPayDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
@@ -1060,75 +849,8 @@ export default function CustomerDetailPage() {
         {/* ── Sidebar ── */}
         <div className="w-72 shrink-0">
           <div className="bg-white rounded-xl border border-slate-200 p-5 sticky top-6 space-y-4">
-            <h3 className="font-semibold text-slate-800">
-              {activeMembership ? "Ganti Paket" : "Aktifkan Membership"}
-            </h3>
-
-            {activeMembership && (
-              <div className={`rounded-lg p-3 text-xs ${isLocker ? "bg-purple-50" : "bg-green-50"}`}>
-                <p className={`font-semibold mb-0.5 ${isLocker ? "text-purple-800" : "text-green-800"}`}>
-                  Aktif: {activeMembership.planName}
-                </p>
-                {isLocker ? (
-                  <p className="text-purple-700">{activeMembership.blendingCredits ?? 0} kredit tersisa</p>
-                ) : (
-                  <p className="text-green-700">
-                    {activeMembership.visitRemaining ?? 0} kunjungan ·{" "}
-                    {activeMembership.expiresAt ? `s/d ${activeMembership.expiresAt.slice(0, 10)}` : "∞"}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {activateFeedback && (
-              <div className={`text-xs rounded-lg px-3 py-2 ${activateFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                {activateFeedback.msg}
-              </div>
-            )}
-
-            <div className="space-y-2">
-              {plans.map((p) => {
-                const isLockerPlan = p.planType === "locker";
-                const ts = TIER_STYLE[isLockerPlan ? "locker" : p.tier] ?? TIER_STYLE.basic!;
-                const isSelected = selectedPlanId === p.id;
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => setSelectedPlanId(isSelected ? "" : p.id)}
-                    className={`w-full text-left rounded-lg border p-3 transition ${
-                      isSelected
-                        ? isLockerPlan ? "border-purple-400 bg-purple-50" : "border-blue-500 bg-blue-50"
-                        : "border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ts.bg} ${ts.text}`}>
-                        {isLockerPlan ? "LOKER" : p.tier.toUpperCase()}
-                      </span>
-                      {isSelected && <span className={`text-xs font-bold ${isLockerPlan ? "text-purple-600" : "text-blue-600"}`}>✓ Dipilih</span>}
-                    </div>
-                    <p className="text-sm font-semibold text-slate-800 mt-1.5">{p.name}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {isLockerPlan
-                        ? `${p.visitQuota > 0 ? `${p.visitQuota}× · ` : "Harian · "}${fmt(p.blendingFeePerSession ?? 0)}/sesi`
-                        : `${fmt(p.price)} · ${p.visitQuota}× · ${p.hasExpiry && p.durationDays ? `${p.durationDays} hari` : "∞"}`
-                      }
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              onClick={handleActivateClick}
-              disabled={activating || !selectedPlanId}
-              className="w-full bg-green-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-green-700 disabled:opacity-50 transition"
-            >
-              {activating ? "Mengaktifkan…" : activeMembership ? "Ganti Paket" : "Aktifkan Membership"}
-            </button>
-
             {/* ── Ganti tier ── */}
-            <div className="border-t border-slate-100 pt-4">
+            <div>
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-sm font-semibold text-slate-700">Level / Tier</h4>
                 <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${TIER_BADGE[customer.tier as CustomerTier] ?? "bg-slate-100 text-slate-600"}`}>
