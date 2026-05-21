@@ -8,7 +8,7 @@ import { useOwnerAuthStore } from "@/store/auth.store";
 const NAV = [
   { href: "/", label: "Beranda", icon: "⊞" },
   { href: "/pos", label: "POS", icon: "🖥️" },
-  { href: "/transfer", label: "Transfer Masuk", icon: "↔️" },
+  { href: "/transfer", label: "Transfer Produk", icon: "↔️" },
   { href: "/customers", label: "Pelanggan", icon: "🧑‍🤝‍🧑" },
   { href: "/membership", label: "Paket Member", icon: "⭐" },
   { href: "/inventory", label: "Produk & Stok", icon: "📦" },

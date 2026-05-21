@@ -191,6 +191,11 @@ export default function CustomerDetailPage() {
   const [tierSaving, setTierSaving] = useState(false);
   const [tierFeedback, setTierFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
+  // Locker top-up
+  const [topUpSessions, setTopUpSessions] = useState("10");
+  const [topUpLoading, setTopUpLoading] = useState(false);
+  const [topUpFeedback, setTopUpFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
+
   const activeMembership = useMemo(
     () => memberships.find((m) => m.status === "active") ?? null,
     [memberships]
@@ -342,6 +347,33 @@ export default function CustomerDetailPage() {
           : (activeMembership.visitRemaining ?? 0))
       : 0;
     setSwitchConfirm({ newPlan: plan, blocked: false, remaining });
+  }
+
+  async function handleLockerTopUp() {
+    if (!activeMembership || !ownerId || !clubId) return;
+    const sessions = parseInt(topUpSessions);
+    if (isNaN(sessions) || sessions < 1) {
+      setTopUpFeedback({ type: "err", msg: "Masukkan jumlah sesi yang valid (min 1)" });
+      return;
+    }
+    setTopUpLoading(true);
+    setTopUpFeedback(undefined);
+    try {
+      const result = await callFunction("locker_topUp", {
+        ownerId, clubId,
+        requestId: uuidv4(), operationId: uuidv4(),
+        membershipId: activeMembership.id,
+        customerId,
+        sessions,
+      }) as { creditsAfter: number };
+      setTopUpFeedback({ type: "ok", msg: `+${sessions} sesi ditambahkan. Saldo: ${result.creditsAfter} kredit` });
+      setTopUpSessions("10");
+      loadAll();
+    } catch (err) {
+      setTopUpFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal top up" });
+    } finally {
+      setTopUpLoading(false);
+    }
   }
 
   async function confirmSwitch() {
@@ -1127,6 +1159,39 @@ export default function CustomerDetailPage() {
                 </button>
               </div>
             </div>
+
+            {/* ── Locker top-up ── */}
+            {isLocker && activeMembership && (
+              <div className="border-t border-slate-100 pt-4">
+                <h4 className="text-sm font-semibold text-slate-700 mb-2">Top-up Kredit Loker</h4>
+                <div className="bg-purple-50 rounded-lg px-3 py-2 mb-3 flex justify-between text-sm">
+                  <span className="text-purple-700">Saldo saat ini</span>
+                  <span className="font-bold text-purple-800">{activeMembership.blendingCredits ?? 0} sesi</span>
+                </div>
+                {topUpFeedback && (
+                  <div className={`mb-2 text-xs rounded-lg px-3 py-2 ${topUpFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                    {topUpFeedback.msg}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm text-center"
+                    placeholder="Jumlah sesi"
+                    value={topUpSessions}
+                    onChange={(e) => setTopUpSessions(e.target.value)}
+                  />
+                  <button
+                    onClick={handleLockerTopUp}
+                    disabled={topUpLoading}
+                    className="bg-purple-600 text-white px-4 rounded-lg text-sm font-semibold hover:bg-purple-700 disabled:opacity-50 transition"
+                  >
+                    {topUpLoading ? "…" : "+ Top Up"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             <button onClick={loadAll} className="text-xs text-blue-600 hover:underline w-full text-center">
               Refresh data
