@@ -66,6 +66,7 @@ export default function DashboardHome() {
     { label: "Device",       desc: "Daftarkan perangkat kasir",    href: "/devices",     accent: "border-slate-200" },
     { label: "Keuangan",     desc: "Jurnal & laporan shift",       href: "/finance",     accent: "border-emerald-200" },
     { label: "Laporan",      desc: "Grafik pendapatan & performa", href: "/reports",     accent: "border-sky-200" },
+    { label: "Pengaturan",   desc: "Profil club & zona waktu",     href: "/settings",    accent: "border-slate-200" },
   ];
 
   return (

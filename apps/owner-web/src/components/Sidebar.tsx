@@ -18,6 +18,7 @@ const NAV = [
   { href: "/debts", label: "Utang Piutang", icon: "💰" },
   { href: "/finance", label: "Keuangan", icon: "₿" },
   { href: "/reports", label: "Laporan", icon: "📊" },
+  { href: "/settings", label: "Pengaturan", icon: "⚙️" },
 ];
 
 export function Sidebar() {
