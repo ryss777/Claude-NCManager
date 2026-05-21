@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { collection, getDocs, orderBy, query } from "firebase/firestore";
+import { v4 as uuidv4 } from "uuid";
 import { useOwnerAuthStore } from "@/store/auth.store";
-import { firebaseDb } from "@/firebase/firebase";
+import { callFunction, firebaseDb } from "@/firebase/firebase";
 import Link from "next/link";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -76,6 +77,12 @@ export default function TransactionsPage() {
   const [selected, setSelected] = useState<HistoryItem | null>(null);
   const [typeFilter, setTypeFilter] = useState<"all" | "product" | "membership">("all");
 
+  // Reversal
+  const [reverseDialog, setReverseDialog] = useState<{ transactionId: string; total: number } | null>(null);
+  const [reverseReason, setReverseReason] = useState("");
+  const [reversing, setReversing] = useState(false);
+  const [reverseError, setReverseError] = useState("");
+
   const loadData = useCallback(async () => {
     if (!ownerId || !clubId) return;
     setLoading(true);
@@ -123,8 +130,81 @@ export default function TransactionsPage() {
 
   const filtered = typeFilter === "all" ? items : items.filter((i) => i.kind === typeFilter);
 
+  async function handleReverse() {
+    if (!reverseDialog || !ownerId || !clubId) return;
+    if (reverseReason.trim().length < 10) {
+      setReverseError("Alasan minimal 10 karakter");
+      return;
+    }
+    setReversing(true);
+    setReverseError("");
+    try {
+      await callFunction("pos_reverseTransaction", {
+        ownerId, clubId,
+        requestId: uuidv4(), operationId: uuidv4(),
+        transactionId: reverseDialog.transactionId,
+        reason: reverseReason.trim(),
+      });
+      setReverseDialog(null);
+      setReverseReason("");
+      setSelected(null);
+      loadData();
+    } catch (err) {
+      setReverseError(err instanceof Error ? err.message : "Gagal membatalkan transaksi");
+    } finally {
+      setReversing(false);
+    }
+  }
+
   return (
     <div className="flex gap-6 h-full min-h-0">
+
+      {/* ── Reversal dialog ── */}
+      {reverseDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+                <span className="text-lg">⚠️</span>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Batalkan Transaksi</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  {fmtIdr(reverseDialog.total)} akan dikembalikan ke stok.
+                </p>
+              </div>
+            </div>
+            {reverseError && (
+              <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{reverseError}</div>
+            )}
+            <div className="mb-4">
+              <label className="text-xs text-slate-500 block mb-1">Alasan pembatalan (min 10 karakter)</label>
+              <textarea
+                rows={3}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none"
+                placeholder="Contoh: Pelanggan salah pesan, produk dikembalikan..."
+                value={reverseReason}
+                onChange={(e) => setReverseReason(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setReverseDialog(null); setReverseReason(""); setReverseError(""); }}
+                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 transition"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleReverse}
+                disabled={reversing}
+                className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-50 transition"
+              >
+                {reversing ? "Memproses…" : "Ya, Batalkan"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── List ── */}
       <div className="flex-1 min-w-0 flex flex-col gap-4">
@@ -370,6 +450,18 @@ export default function TransactionsPage() {
                       Ada utang — cek tab Utang di profil pelanggan
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Reversal button — product tx only */}
+              {selected.kind === "product" && selected.status === "completed" && (
+                <div className="border-t border-slate-100 pt-3">
+                  <button
+                    onClick={() => setReverseDialog({ transactionId: selected.id, total: selected.total })}
+                    className="w-full border border-red-200 text-red-600 rounded-lg py-2 text-xs font-semibold hover:bg-red-50 transition"
+                  >
+                    Batalkan Transaksi
+                  </button>
                 </div>
               )}
 
