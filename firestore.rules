@@ -40,6 +40,23 @@ service cloud.firestore {
         && request.auth.token.deviceId != '';
     }
 
+    // ── Owner-level collections ──────────────────────────────────────────────
+
+    // Notifications received by this owner (e.g., incoming transfers)
+    match /owners/{ownerId}/notifications/{notificationId} {
+      allow read, update: if isOwnerOf(ownerId);
+      allow create: if false; // Cloud Function only
+      allow delete: if false;
+    }
+
+    // Product transfers initiated by or sent to this owner
+    match /owners/{ownerId}/productTransfers/{transferId} {
+      allow read: if isOwnerOf(ownerId);
+      allow create: if false; // Cloud Function only
+      allow update: if false; // Cloud Function only
+      allow delete: if false;
+    }
+
     // ── Product Catalog (global, admin-write, authenticated-read) ────────────
 
     match /productCatalog/{productId} {
@@ -172,6 +189,15 @@ service cloud.firestore {
           allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
           allow create: if false; // Cloud Function only
           allow update: if false; // Cloud Function only
+          allow delete: if false;
+        }
+
+        // ── Replenishments ──────────────────────────────────────────────────
+
+        match /replenishments/{replenishmentId} {
+          allow read: if isOwnerOf(ownerId);
+          allow create: if false; // Cloud Function only
+          allow update: if false; // immutable
           allow delete: if false;
         }
 
