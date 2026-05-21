@@ -34,6 +34,7 @@ interface Product {
   name: string;
   category: string | null;
   prices: PriceTiers;
+  currentStock: number;
 }
 
 interface Customer {
@@ -139,10 +140,13 @@ export default function PosScreen() {
   }
 
   function addProduct(p: Product) {
+    if (p.currentStock <= 0) return;
     const unitPrice = tierPrice(p);
     setCart((c) => {
       const idx = c.findIndex((i) => i.productId === p.id);
       if (idx >= 0) {
+        const maxStock = p.currentStock;
+        if (c[idx]!.qty >= maxStock) return c;
         return c.map((item, i) => i === idx ? { ...item, qty: item.qty + 1 } : item);
       }
       return [...c, { productId: p.id, productName: p.name, qty: 1, unitPrice }];
@@ -150,9 +154,14 @@ export default function PosScreen() {
   }
 
   function updateQty(productId: string, delta: number) {
+    const maxStock = products.find((p) => p.id === productId)?.currentStock ?? Infinity;
     setCart((c) =>
       c
-        .map((i) => i.productId === productId ? { ...i, qty: i.qty + delta } : i)
+        .map((i) => {
+          if (i.productId !== productId) return i;
+          const next = i.qty + delta;
+          return { ...i, qty: Math.min(next, maxStock) };
+        })
         .filter((i) => i.qty > 0)
     );
   }
@@ -284,12 +293,37 @@ export default function PosScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Produk</Text>
             <View style={styles.productGrid}>
-              {products.map((p) => (
-                <TouchableOpacity key={p.id} style={styles.productCard} onPress={() => addProduct(p)}>
-                  <Text style={styles.productName} numberOfLines={2}>{p.name}</Text>
-                  <Text style={styles.productPrice}>Rp {fmt(tierPrice(p))}</Text>
-                </TouchableOpacity>
-              ))}
+              {products.map((p) => {
+                const outOfStock = p.currentStock <= 0;
+                const lowStock = !outOfStock && p.currentStock <= 5;
+                return (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.productCard, outOfStock && styles.productCardOut]}
+                    onPress={() => addProduct(p)}
+                    disabled={outOfStock}
+                    activeOpacity={outOfStock ? 1 : 0.7}
+                  >
+                    <Text style={[styles.productName, outOfStock && styles.productNameOut]} numberOfLines={2}>
+                      {p.name}
+                    </Text>
+                    <Text style={[styles.productPrice, outOfStock && styles.productPriceOut]}>
+                      Rp {fmt(tierPrice(p))}
+                    </Text>
+                    <View style={[
+                      styles.stockBadge,
+                      outOfStock ? styles.stockBadgeOut : lowStock ? styles.stockBadgeLow : styles.stockBadgeOk,
+                    ]}>
+                      <Text style={[
+                        styles.stockBadgeText,
+                        outOfStock ? styles.stockBadgeTextOut : lowStock ? styles.stockBadgeTextLow : styles.stockBadgeTextOk,
+                      ]}>
+                        {outOfStock ? "Habis" : `Stok ${p.currentStock}`}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
         )}
@@ -445,8 +479,19 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 13, fontWeight: "600", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 },
   productGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   productCard: { width: "30%", backgroundColor: "#f8fafc", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#e2e8f0", alignItems: "center" },
+  productCardOut: { opacity: 0.45, backgroundColor: "#f1f5f9" },
   productName: { fontSize: 12, fontWeight: "600", color: "#1e293b", textAlign: "center", marginBottom: 4 },
+  productNameOut: { color: "#94a3b8" },
   productPrice: { fontSize: 11, color: "#2563eb", fontWeight: "700" },
+  productPriceOut: { color: "#94a3b8" },
+  stockBadge: { marginTop: 5, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
+  stockBadgeOut: { backgroundColor: "#fee2e2" },
+  stockBadgeLow: { backgroundColor: "#fef3c7" },
+  stockBadgeOk: { backgroundColor: "#f1f5f9" },
+  stockBadgeText: { fontSize: 9, fontWeight: "700" },
+  stockBadgeTextOut: { color: "#dc2626" },
+  stockBadgeTextLow: { color: "#d97706" },
+  stockBadgeTextOk: { color: "#64748b" },
   cartRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4 },
   cartInfo: { flex: 1 },
   cartName: { fontSize: 14, fontWeight: "600", color: "#1e293b" },

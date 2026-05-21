@@ -29,11 +29,10 @@ const MOVEMENT_OPTIONS: { key: MovementType; label: string; icon: string; color:
 interface InventoryItem {
   id: string;
   name: string;
-  sku: string;
+  category: string | null;
   unit: string;
   currentStock: number;
   minimumStock: number;
-  costPerUnit: number;
   isActive: boolean;
 }
 
@@ -87,7 +86,7 @@ export default function InventoryScreen() {
     setSelected(item);
     setMovementType("restock");
     setQuantity("");
-    setUnitCost(item.costPerUnit.toString());
+    setUnitCost("");
     setNotes("");
   }
 
@@ -219,7 +218,7 @@ export default function InventoryScreen() {
                 >
                   <View style={styles.itemInfo}>
                     <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={styles.itemSku}>{item.sku}</Text>
+                    <Text style={styles.itemSku}>{item.category ?? ""}</Text>
                   </View>
                   <View style={styles.itemStock}>
                     <Text style={[styles.stockNum, isLow && styles.stockNumLow]}>

@@ -234,6 +234,8 @@ export default function MembershipScreen() {
                 customerId: selectedCustomer.id,
                 planId: selectedPlan.id,
                 transactionId: uuidv4(),
+                amountPaid: selectedPlan.price,
+                paymentMethod,
               }) as { membershipId: string; expiresAt: string | null };
 
               const expires = result.expiresAt ? result.expiresAt.slice(0, 10) : "Tidak ada expired";
@@ -694,4 +696,26 @@ const styles = StyleSheet.create({
   activateBtnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 
   disabledBtn: { opacity: 0.5 },
+
+  // Locker card
+  lockerCard: {
+    borderWidth: 1.5, borderRadius: 12, padding: 14, gap: 8, marginBottom: 10,
+    borderColor: "#a855f7", backgroundColor: "#faf5ff",
+  },
+  lockerBadge: { fontSize: 11, fontWeight: "700", color: "#9333ea", letterSpacing: 0.5 },
+  lockerCreditsRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  lockerCreditsLabel: { fontSize: 13, color: "#6b21a8" },
+  lockerCreditsValue: { fontSize: 28, fontWeight: "700", color: "#7c3aed" },
+  lockerFeeText: { fontSize: 12, color: "#a855f7" },
+  lockerControls: { backgroundColor: "#f8fafc", borderRadius: 8, padding: 12, gap: 8, marginBottom: 4 },
+  lockerControlLabel: { fontSize: 13, color: "#64748b", fontWeight: "600" },
+  guestCountRow: { flexDirection: "row", gap: 6 },
+  guestBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    borderWidth: 1.5, borderColor: "#e2e8f0",
+    alignItems: "center", justifyContent: "center",
+  },
+  guestBtnActive: { borderColor: "#9333ea", backgroundColor: "#faf5ff" },
+  guestBtnText: { fontSize: 15, color: "#64748b", fontWeight: "600" },
+  guestBtnTextActive: { color: "#9333ea" },
 });
