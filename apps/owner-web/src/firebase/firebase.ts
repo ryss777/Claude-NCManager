@@ -64,7 +64,24 @@ export function onAuthChanged(callback: (user: User | null) => void) {
   return onAuthStateChanged(firebaseAuth(), callback);
 }
 
+/**
+ * Strip undefined values recursively so Firebase's encoder doesn't convert
+ * them to null — which would fail Zod `.optional()` validation on the server.
+ */
+function stripUndefined(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(stripUndefined);
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, stripUndefined(v)])
+    );
+  }
+  return value;
+}
+
 export function callFunction<T = unknown>(name: string, data: Record<string, unknown>) {
   const fn = httpsCallable<Record<string, unknown>, T>(firebaseFunctions(), name);
-  return fn(data).then((r) => r.data);
+  return fn(stripUndefined(data) as Record<string, unknown>).then((r) => r.data);
 }
