@@ -11,7 +11,7 @@ export const closeShiftSchema = tenantRefSchema.merge(idempotencySchema).extend(
   shiftId: z.string().min(1),
   operatorId: z.string().min(1),
   actualCash: z.number().min(0),
-  notes: z.string().max(500).optional(),
+  notes: z.string().max(500).nullish(),
 });
 
 export const createJournalEntrySchema = tenantRefSchema
@@ -31,8 +31,8 @@ export const createJournalEntrySchema = tenantRefSchema
     debitAccount: z.string().min(4).max(4),
     creditAccount: z.string().min(4).max(4),
     description: z.string().min(1).max(500),
-    referenceId: z.string().optional(),
-    shiftId: z.string().optional(),
+    referenceId: z.string().nullish(),
+    shiftId: z.string().nullish(),
   });
 
 export type OpenShiftInput = z.infer<typeof openShiftSchema>;

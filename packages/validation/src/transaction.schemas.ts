@@ -6,8 +6,8 @@ const paymentMethodSchema = z.enum(["cash", "transfer", "member_balance"]);
 const transactionItemSchema = z.object({
   productId: z.string().min(1),
   productName: z.string().min(1),
-  variantId: z.string().optional(),
-  variantName: z.string().optional(),
+  variantId: z.string().nullish(),
+  variantName: z.string().nullish(),
   modifierIds: z.array(z.string()),
   modifierNames: z.array(z.string()),
   quantity: z.number().int().min(1).max(99),
@@ -22,8 +22,8 @@ export const createTransactionSchema = tenantRefSchema
     items: z.array(transactionItemSchema).min(1).max(50),
     paymentMethod: paymentMethodSchema,
     amountPaid: z.number().min(0),
-    customerId: z.string().optional(),
-    membershipId: z.string().optional(),
+    customerId: z.string().nullish(),
+    membershipId: z.string().nullish(),
     discount: z.number().min(0).default(0),
   })
   .refine(
@@ -58,9 +58,9 @@ export const ownerSaleSchema = tenantRefSchema
     items: z.array(transactionItemSchema).min(1).max(50),
     paymentMethod: paymentMethodSchema,
     amountPaid: z.number().min(0),
-    customerId: z.string().optional(),
+    customerId: z.string().nullish(),
     discount: z.number().min(0).default(0),
-    notes: z.string().max(500).optional(),
+    notes: z.string().max(500).nullish(),
   })
   .refine(
     (data) => {

@@ -21,9 +21,9 @@ export const createProductCatalogSchema = z.object({
 
 export const updateProductCatalogSchema = z.object({
   productId: z.string().min(1),
-  name: z.string().min(1).max(100).optional(),
-  category: z.enum(PRODUCT_CATEGORIES).optional(),
-  prices: priceTiersSchema.optional(),
+  name: z.string().min(1).max(100).nullish(),
+  category: z.enum(PRODUCT_CATEGORIES).nullish(),
+  prices: priceTiersSchema.nullish(),
 });
 
 export const addFromCatalogSchema = tenantRefSchema.extend({
@@ -50,17 +50,17 @@ export const createInventoryMovementSchema = tenantRefSchema
     movementType: movementTypeSchema,
     quantity: z.number().min(0.001),
     unitCost: z.number().min(0),
-    referenceId: z.string().optional(),
+    referenceId: z.string().nullish(),
     referenceType: z
       .enum(["transaction", "shift", "manual", "transfer"])
-      .optional(),
-    notes: z.string().max(500).optional(),
+      .nullish(),
+    notes: z.string().max(500).nullish(),
   });
 
 export const createInventoryItemSchema = tenantRefSchema.extend({
   name: z.string().min(1).max(100),
   unit: unitSchema,
-  category: z.string().max(50).optional(),
+  category: z.string().max(50).nullish(),
   prices: priceTiersSchema,
   minimumStock: z.number().min(0).default(0),
 });
@@ -76,7 +76,7 @@ export const adjustInventoryStockSchema = tenantRefSchema
     inventoryItemId: z.string().min(1),
     quantity: z.number().min(0),
     unitCost: z.number().min(0),
-    notes: z.string().max(500).optional(),
+    notes: z.string().max(500).nullish(),
   });
 
 const replenishmentItemSchema = z.object({
@@ -90,7 +90,7 @@ const replenishmentItemSchema = z.object({
 export const createReplenishmentSchema = tenantRefSchema.merge(idempotencySchema).extend({
   items: z.array(replenishmentItemSchema).min(1),
   priceTier: z.enum(["retail", "ds", "sc", "sbQp", "spv"]),
-  notes: z.string().max(500).optional(),
+  notes: z.string().max(500).nullish(),
 });
 
 export type CreateInventoryMovementInput = z.infer<

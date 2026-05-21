@@ -11,7 +11,7 @@ export const operatorLoginSchema = z.object({
 export const registerDeviceSchema = tenantRefSchema.extend({
   deviceName: z.string().min(1).max(100),
   platform: z.enum(["android", "ios"]),
-  fcmToken: z.string().optional(),
+  fcmToken: z.string().nullish(),
 });
 
 export const createOperatorSchema = tenantRefSchema.extend({
@@ -22,7 +22,7 @@ export const createOperatorSchema = tenantRefSchema.extend({
 
 export const updateOperatorPinSchema = tenantRefSchema.extend({
   operatorId: z.string().min(1),
-  currentPin: z.string().length(6).regex(/^\d{6}$/).optional(),
+  currentPin: z.string().length(6).regex(/^\d{6}$/).nullish(),
   newPin: z.string().length(6).regex(/^\d{6}$/, "PIN must be 6 digits"),
 });
 

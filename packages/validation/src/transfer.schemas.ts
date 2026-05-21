@@ -3,7 +3,7 @@ import { idempotencySchema, tenantRefSchema } from "./common.schemas";
 
 const transferItemSchema = z.object({
   productId: z.string().min(1),
-  productCatalogId: z.string().nullable().optional(),
+  productCatalogId: z.string().nullish(),
   productName: z.string().min(1),
   quantity: z.number().int().min(1),
   unitPrice: z.number().min(0),
@@ -15,12 +15,12 @@ export const createProductTransferSchema = z.object({
   sourceClubId: z.string().min(1),
 }).merge(idempotencySchema).extend({
   destinationType: z.enum(["club", "owner"]),
-  destinationOwnerId: z.string().min(1).optional(),
-  destinationClubId: z.string().min(1).optional(),
+  destinationOwnerId: z.string().min(1).nullish(),
+  destinationClubId: z.string().min(1).nullish(),
   paymentType: z.enum(["bayar", "pinjam"]),
   priceTier: z.enum(["retail", "ds", "sc", "sbQp", "spv"]),
   items: z.array(transferItemSchema).min(1),
-  notes: z.string().max(500).optional(),
+  notes: z.string().max(500).nullish(),
 });
 
 export type CreateProductTransferInput = z.infer<typeof createProductTransferSchema>;

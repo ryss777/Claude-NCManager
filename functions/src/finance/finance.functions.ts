@@ -159,9 +159,9 @@ export const finance_createJournalEntry = onCall(async (request) => {
       description: payload.description,
       requestId: payload.requestId,
       operationId,
-      referenceId: payload.referenceId,
+      referenceId: payload.referenceId ?? undefined,
       referenceType: undefined,
-      shiftId: payload.shiftId,
+      shiftId: payload.shiftId ?? undefined,
     });
 
     await markOperationComplete(tx, operationId, idempotencyPath, { entryId: entryId! });

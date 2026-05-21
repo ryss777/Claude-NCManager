@@ -39,9 +39,9 @@ export const catalog_updateProduct = onCall(async (request) => {
   if (!snap.exists) throw new HttpsError("not-found", "Product not found");
 
   const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-  if (fields.name !== undefined) updates["name"] = fields.name;
-  if (fields.category !== undefined) updates["category"] = fields.category;
-  if (fields.prices !== undefined) updates["prices"] = fields.prices;
+  if (fields.name != null) updates["name"] = fields.name;
+  if (fields.category != null) updates["category"] = fields.category;
+  if (fields.prices != null) updates["prices"] = fields.prices;
 
   await ref.update(updates);
   return { productId };
