@@ -11,7 +11,15 @@ import {
 import { COLLECTIONS, ACCOUNT_CODES } from "@nc-manager/shared-constants";
 import type { AccountCode, PaymentMethod } from "@nc-manager/shared-types";
 import { writeJournalEntry } from "../finance/finance.helpers";
-import { readInventorySnaps, writeInventoryMovements, type SaleItemRef } from "../inventory/inventory.helpers";
+import {
+  readInventorySnaps,
+  writeInventoryMovements,
+  loadRecipesForItems,
+  buildIngredientDeductions,
+  readIngredientSnaps,
+  writeIngredientDeductions,
+  type SaleItemRef,
+} from "../inventory/inventory.helpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -86,6 +94,7 @@ export const pos_createTransaction = onCall(async (request) => {
     completedAt: null,
     reversalReason: null,
     reversedTransactionId: null,
+    createdBy: "operator",
   };
 
   await db.runTransaction(async (tx) => {
@@ -171,9 +180,16 @@ export const pos_completeTransaction = onCall(async (request) => {
   const shiftRef = db.collection(COLLECTIONS.SHIFTS(ownerId, clubId)).doc(shiftId);
   const accounts = saleAccounts(paymentMethod);
 
+  // Pre-load recipes (outside the Firestore transaction — reads only)
+  const recipeMap = await loadRecipesForItems(ownerId, clubId, txItems);
+  const ingredientDeductions = buildIngredientDeductions(txItems, recipeMap);
+
   await db.runTransaction(async (tx) => {
     // Pre-read inventory items before any writes
     const invSnaps = await readInventorySnaps(tx, ownerId, clubId, txItems);
+    const ingSnaps = ingredientDeductions.length > 0
+      ? await readIngredientSnaps(tx, ownerId, clubId, ingredientDeductions)
+      : [];
 
     // 1. Update transaction status
     tx.update(txRef, {
@@ -256,6 +272,22 @@ export const pos_completeTransaction = onCall(async (request) => {
       movementType: "sale",
     });
 
+    // 6. Deduct ingredient stock from linked recipes
+    if (ingredientDeductions.length > 0) {
+      writeIngredientDeductions(tx, {
+        ownerId,
+        clubId,
+        ingredients: ingredientDeductions,
+        ingSnaps,
+        transactionId,
+        baseOperationId: operationId,
+        operatorId,
+        requestId: txData["requestId"] as string,
+        now,
+        movementType: "sale",
+      });
+    }
+
     await markOperationComplete(tx, operationId, idempotencyPath, { transactionId });
   });
 
@@ -300,9 +332,16 @@ export const pos_reverseTransaction = onCall(async (request) => {
   const reversalAccs = reversalAccounts(paymentMethod);
   const shiftRef = db.collection(COLLECTIONS.SHIFTS(ownerId, clubId)).doc(shiftId);
 
+  // Pre-load recipes for ingredient restoration
+  const recipeMap = await loadRecipesForItems(ownerId, clubId, txItems);
+  const ingredientDeductions = buildIngredientDeductions(txItems, recipeMap);
+
   await db.runTransaction(async (tx) => {
     // Pre-read inventory items before any writes
     const invSnaps = await readInventorySnaps(tx, ownerId, clubId, txItems);
+    const ingSnaps = ingredientDeductions.length > 0
+      ? await readIngredientSnaps(tx, ownerId, clubId, ingredientDeductions)
+      : [];
 
     // 1. Mark original transaction as reversed
     tx.update(txRef, {
@@ -363,6 +402,22 @@ export const pos_reverseTransaction = onCall(async (request) => {
       now,
       movementType: "reversal",
     });
+
+    // 6. Restore ingredient stock from linked recipes
+    if (ingredientDeductions.length > 0) {
+      writeIngredientDeductions(tx, {
+        ownerId,
+        clubId,
+        ingredients: ingredientDeductions,
+        ingSnaps,
+        transactionId,
+        baseOperationId: operationId,
+        operatorId: request.auth!.uid,
+        requestId: payload.requestId,
+        now,
+        movementType: "reversal",
+      });
+    }
 
     await markOperationComplete(tx, operationId, idempotencyPath, { transactionId });
   });

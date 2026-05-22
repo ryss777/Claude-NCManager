@@ -5,6 +5,7 @@ import { checkIdempotency, throwIfDuplicate, markOperationComplete } from "../ut
 import {
   createInventoryMovementSchema,
   createInventoryItemSchema,
+  createIngredientSchema,
   adjustInventoryStockSchema,
   addFromCatalogSchema,
   removeInventoryItemSchema,
@@ -30,6 +31,36 @@ export const inventory_createItem = onCall(async (request) => {
     unit: payload.unit,
     category: payload.category ?? null,
     prices: payload.prices,
+    currentStock: 0,
+    minimumStock: payload.minimumStock,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return { inventoryItemId: itemRef.id };
+});
+
+// ── inventory_createIngredient ────────────────────────────────────────────────
+
+export const inventory_createIngredient = onCall(async (request) => {
+  requireRole(request, "owner");
+
+  const payload = validatePayload(createIngredientSchema, request.data);
+  const { ownerId, clubId } = payload;
+
+  const itemRef = db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc();
+  const now = new Date().toISOString();
+
+  await itemRef.set({
+    id: itemRef.id,
+    ownerId,
+    clubId,
+    name: payload.name,
+    unit: payload.unit,
+    category: payload.category ?? null,
+    prices: null,
+    itemType: "ingredient",
     currentStock: 0,
     minimumStock: payload.minimumStock,
     isActive: true,

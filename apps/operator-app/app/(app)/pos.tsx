@@ -8,6 +8,8 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -79,12 +81,12 @@ export default function PosScreen() {
   const paid = parseFloat(amountPaid) || 0;
   const change = paid - total;
 
-  const filteredCustomers = customerSearch.length >= 2
+  const filteredCustomers = customerSearch.length >= 1
     ? customers.filter((c) =>
         c.displayName.toLowerCase().includes(customerSearch.toLowerCase()) ||
         (c.phone ?? "").includes(customerSearch)
-      )
-    : [];
+      ).slice(0, 10)
+    : customers.slice(0, 10);
 
   // Listen for active shift in real-time
   useEffect(() => {
@@ -286,6 +288,7 @@ export default function PosScreen() {
         </View>
       )}
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
         {/* Product grid */}
@@ -384,9 +387,10 @@ export default function PosScreen() {
             <View>
               <TextInput
                 style={styles.input}
-                placeholder="Cari nama / no. HP (min 2 karakter)"
+                placeholder="Cari nama / no. HP pelanggan"
                 value={customerSearch}
                 onChangeText={(v) => { setCustomerSearch(v); setShowCustomerList(true); }}
+                onFocus={() => setShowCustomerList(true)}
               />
               {showCustomerList && filteredCustomers.length > 0 && (
                 <View style={styles.dropdown}>
@@ -459,6 +463,7 @@ export default function PosScreen() {
 
         <View style={{ height: 24 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

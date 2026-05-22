@@ -6,8 +6,6 @@ import { v4 as uuidv4 } from "uuid";
 import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
 
-interface ClubOption { id: string; name: string; }
-
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type CustomerTier = "retail" | "ds" | "sc" | "sbQp" | "spv";
@@ -51,7 +49,7 @@ const fmtIdr = (n: number) =>
 
 const CATEGORIES = ["Semua", "Inner Nutrition", "Outer Nutrition", "Accessories"];
 
-type ActiveTab = "pos" | "pos_membership" | "transfer";
+type ActiveTab = "pos" | "pos_membership";
 
 interface Plan {
   id: string;
@@ -91,30 +89,6 @@ export default function OwnerPosPage() {
   const [memNotes, setMemNotes] = useState("");
   const [memActivating, setMemActivating] = useState(false);
   const [memFeedback, setMemFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
-
-  // Transfer state
-  const [clubs, setClubs] = useState<ClubOption[]>([]);
-  const [transferDestType, setTransferDestType] = useState<"club" | "owner">("club");
-  const [transferDestClubId, setTransferDestClubId] = useState("");
-  const [transferDestOwnerId, setTransferDestOwnerId] = useState("");
-  const [transferPaymentType, setTransferPaymentType] = useState<"bayar" | "pinjam">("bayar");
-  const [transferTier, setTransferTier] = useState<CustomerTier>("retail");
-  const [transferQty, setTransferQty] = useState<Record<string, string>>({});
-  const [transferNotes, setTransferNotes] = useState("");
-  const [transferring, setTransferring] = useState(false);
-
-  interface TransferReceipt {
-    transferId: string;
-    total: number;
-    status: string;
-    items: Array<{ productId: string; productName: string; quantity: number; unitPrice: number; subtotal: number }>;
-    destType: "club" | "owner";
-    destId: string;
-    paymentType: "bayar" | "pinjam";
-    tier: CustomerTier;
-    timestamp: string;
-  }
-  const [transferResult, setTransferResult] = useState<TransferReceipt | null>(null);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -205,19 +179,13 @@ export default function OwnerPosPage() {
     try {
       const db = firebaseDb();
       const base = `owners/${ownerId}/clubs/${clubId}`;
-      const [prodSnap, custSnap, clubsSnap, planSnap] = await Promise.all([
+      const [prodSnap, custSnap, planSnap] = await Promise.all([
         getDocs(query(collection(db, `${base}/inventoryItems`), where("isActive", "==", true))),
         getDocs(collection(db, `${base}/customers`)),
-        getDocs(collection(db, `owners/${ownerId}/clubs`)),
         getDocs(query(collection(db, `${base}/membershipPlans`), where("isActive", "==", true))),
       ]);
       setProducts(prodSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Product)));
       setCustomers(custSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Customer)));
-      setClubs(
-        clubsSnap.docs
-          .filter((d) => d.id !== clubId)
-          .map((d) => ({ id: d.id, name: d.data()["name"] as string }))
-      );
       setPlans(planSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Plan)));
     } finally {
       setLoadingData(false);
@@ -225,7 +193,11 @@ export default function OwnerPosPage() {
   }, [ownerId, clubId]);
 
   async function handleMemActivate() {
-    if (!ownerId || !clubId || !memSelectedCustomer || !memSelectedPlanId) return;
+    if (!memSelectedCustomer || !memSelectedPlanId) return;
+    if (!ownerId || !clubId) {
+      setMemFeedback({ type: "err", msg: "Sesi belum siap, coba refresh halaman." });
+      return;
+    }
     setMemActivating(true);
     setMemFeedback(undefined);
     try {
@@ -350,78 +322,6 @@ export default function OwnerPosPage() {
     }
   }
 
-  // ── Transfer submit ─────────────────────────────────────────────────────────
-
-  const transferItems = products
-    .map((p) => {
-      const qty = parseInt(transferQty[p.id] ?? "0", 10);
-      if (!qty || qty <= 0) return null;
-      const unitPrice = p.prices?.[transferTier] ?? p.prices?.retail ?? 0;
-      const catalogId = (p as unknown as { productCatalogId?: string }).productCatalogId ?? null;
-      return {
-        productId: p.id,
-        productCatalogId: catalogId,
-        productName: p.name,
-        quantity: qty,
-        unitPrice,
-        subtotal: qty * unitPrice,
-      };
-    })
-    .filter((x): x is NonNullable<typeof x> => x !== null);
-
-  const transferTotal = transferItems.reduce((s, i) => s + i.subtotal, 0);
-
-  async function handleTransfer() {
-    if (!ownerId || !clubId || transferItems.length === 0) return;
-    if (transferDestType === "club" && !transferDestClubId) {
-      alert("Pilih club tujuan");
-      return;
-    }
-    if (transferDestType === "owner" && !transferDestOwnerId.trim()) {
-      alert("Masukkan ID owner tujuan");
-      return;
-    }
-    setTransferring(true);
-    setTransferResult(null);
-    try {
-      const result = await callFunction<{ transferId: string; total: number; status: string }>(
-        "productTransfer_create",
-        {
-          ownerId,
-          sourceClubId: clubId,
-          requestId: uuidv4(),
-          operationId: uuidv4(),
-          destinationType: transferDestType,
-          ...(transferDestType === "club"
-            ? { destinationClubId: transferDestClubId }
-            : { destinationOwnerId: transferDestOwnerId.trim() }),
-          paymentType: transferPaymentType,
-          priceTier: transferTier,
-          items: transferItems,
-          notes: transferNotes.trim() || undefined,
-        }
-      );
-      setTransferResult({
-        transferId: result.transferId,
-        total: result.total,
-        status: result.status,
-        items: transferItems,
-        destType: transferDestType,
-        destId: transferDestType === "club" ? transferDestClubId : transferDestOwnerId.trim(),
-        paymentType: transferPaymentType,
-        tier: transferTier,
-        timestamp: new Date().toLocaleString("id-ID"),
-      });
-      setTransferQty({});
-      setTransferNotes("");
-      loadData();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Transfer gagal");
-    } finally {
-      setTransferring(false);
-    }
-  }
-
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
@@ -430,9 +330,8 @@ export default function OwnerPosPage() {
       {/* ── Tab switcher ── */}
       <div className="flex items-center gap-1 border-b border-slate-200 pb-0">
         {([
-          { key: "pos",           label: "POS" },
+          { key: "pos",            label: "POS" },
           { key: "pos_membership", label: "POS Membership" },
-          { key: "transfer",      label: "Transfer Produk" },
         ] as { key: ActiveTab; label: string }[]).map(({ key, label }) => (
           <button
             key={key}
@@ -447,296 +346,6 @@ export default function OwnerPosPage() {
           </button>
         ))}
       </div>
-
-      {/* ── Transfer Produk ── */}
-      {activeTab === "transfer" && (
-        <div className="flex-1 flex gap-6 min-h-0">
-
-          {/* Left: product list with qty inputs */}
-          <div className="flex-1 min-w-0 flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-slate-900">Transfer Produk</h2>
-              {loadingData && <span className="text-xs text-slate-400">Memuat…</span>}
-            </div>
-
-            {/* Tier selector */}
-            <div className="flex items-center gap-3">
-              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">Harga Tier</span>
-              <div className="flex gap-1.5">
-                {(Object.keys(TIER_LABELS) as CustomerTier[]).map((tier) => (
-                  <button
-                    key={tier}
-                    onClick={() => setTransferTier(tier)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
-                      transferTier === tier
-                        ? "bg-slate-800 text-white border-slate-800"
-                        : "border-slate-200 text-slate-500 hover:border-slate-400"
-                    }`}
-                  >
-                    {TIER_LABELS[tier]}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Product rows */}
-            {products.length === 0 ? (
-              <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
-                Belum ada produk di inventaris.
-              </div>
-            ) : (
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-slate-500 text-xs">
-                    <tr>
-                      <th className="px-4 py-2 text-left">Produk</th>
-                      <th className="px-4 py-2 text-right">Stok</th>
-                      <th className="px-4 py-2 text-right">Harga ({TIER_LABELS[transferTier]})</th>
-                      <th className="px-4 py-2 text-right w-32">Jumlah Kirim</th>
-                      <th className="px-4 py-2 text-right">Subtotal</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {products.map((p) => {
-                      const unitPrice = p.prices?.[transferTier] ?? p.prices?.retail ?? 0;
-                      const qty = parseInt(transferQty[p.id] ?? "0", 10) || 0;
-                      const currentStock = p.currentStock ?? 0;
-                      return (
-                        <tr key={p.id} className={`hover:bg-slate-50 ${qty > 0 ? "bg-orange-50/40" : ""}`}>
-                          <td className="px-4 py-2">
-                            <p className="font-medium text-slate-800">{p.name}</p>
-                            <p className="text-xs text-slate-400">{p.category}</p>
-                          </td>
-                          <td className={`px-4 py-2 text-right text-sm font-semibold ${qty > currentStock ? "text-red-500" : "text-slate-600"}`}>
-                            {currentStock}
-                          </td>
-                          <td className="px-4 py-2 text-right font-mono text-slate-600 text-xs">{fmtIdr(unitPrice)}</td>
-                          <td className="px-4 py-2 text-right">
-                            <input
-                              type="number"
-                              min="0"
-                              className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm text-right focus:border-orange-400 focus:outline-none"
-                              placeholder="0"
-                              value={transferQty[p.id] ?? ""}
-                              onChange={(e) =>
-                                setTransferQty((prev) => ({ ...prev, [p.id]: e.target.value }))
-                              }
-                            />
-                          </td>
-                          <td className="px-4 py-2 text-right font-semibold text-slate-700 text-xs">
-                            {qty > 0 ? fmtIdr(qty * unitPrice) : "—"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* Right: destination + payment + summary */}
-          <div className="w-80 shrink-0 flex flex-col gap-3">
-
-            {/* Transfer receipt */}
-            {transferResult && (
-              <div className="bg-white border border-green-300 rounded-xl overflow-hidden shadow-sm">
-                <div className={`px-4 py-3 ${transferResult.status === "completed" ? "bg-green-600" : "bg-amber-500"}`}>
-                  <p className="text-sm font-bold text-white">
-                    {transferResult.status === "completed" ? "Transfer Selesai" : "Menunggu Konfirmasi Penerima"}
-                  </p>
-                  <p className="text-xs text-white/80 mt-0.5">{transferResult.timestamp}</p>
-                </div>
-                <div className="p-4 space-y-3 text-sm">
-                  <div className="space-y-1 text-xs text-slate-500">
-                    <div className="flex justify-between">
-                      <span>Tujuan</span>
-                      <span className="font-medium text-slate-700">
-                        {transferResult.destType === "club" ? `Club: ${transferResult.destId}` : `Owner: ${transferResult.destId}`}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Jenis</span>
-                      <span className={`font-semibold ${transferResult.paymentType === "pinjam" ? "text-amber-600" : "text-blue-600"}`}>
-                        {transferResult.paymentType === "bayar" ? "Bayar" : "Pinjam"}
-                        {transferResult.paymentType === "pinjam" && transferResult.destType === "owner" && " — Gratis"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="border-t border-slate-100 pt-2 space-y-1">
-                    {transferResult.items.map((item) => (
-                      <div key={item.productId} className="flex justify-between text-xs text-slate-600">
-                        <span className="truncate mr-2">{item.quantity}× {item.productName}</span>
-                        <span className="shrink-0">{fmtIdr(item.subtotal)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="border-t border-slate-100 pt-2 flex justify-between font-bold">
-                    <span className="text-slate-700">Total</span>
-                    <span className={transferResult.paymentType === "pinjam" && transferResult.destType === "owner" ? "text-amber-600" : "text-slate-900"}>
-                      {transferResult.paymentType === "pinjam" && transferResult.destType === "owner"
-                        ? "Rp 0 (Gratis)"
-                        : fmtIdr(transferResult.total)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-400 font-mono">Ref: {transferResult.transferId.slice(0, 8).toUpperCase()}</p>
-                  <div className="flex gap-2 pt-1">
-                    <button
-                      onClick={() => {
-                        const isFree = transferResult.paymentType === "pinjam" && transferResult.destType === "owner";
-                        const lines = [
-                          "*TRANSFER PRODUK - NC Manager*",
-                          `Tanggal: ${transferResult.timestamp}`,
-                          transferResult.destType === "club"
-                            ? `Ke Club: ${transferResult.destId}`
-                            : `Ke Owner: ${transferResult.destId}`,
-                          `Jenis: ${transferResult.paymentType === "bayar" ? "Bayar" : `Pinjam${isFree ? " (Gratis)" : ""}`}`,
-                          `Harga Tier: ${TIER_LABELS[transferResult.tier]}`,
-                          "───────────────────────",
-                          ...transferResult.items.map((i) => `- ${i.productName} ×${i.quantity}${isFree ? "" : ` = ${fmtIdr(i.subtotal)}`}`),
-                          "───────────────────────",
-                          `Total: ${isFree ? "Rp 0 (Gratis)" : fmtIdr(transferResult.total)}`,
-                          `Ref: ${transferResult.transferId.slice(0, 8).toUpperCase()}`,
-                          transferResult.status === "pending_acceptance"
-                            ? "Status: Menunggu konfirmasi penerima"
-                            : "Status: Selesai",
-                        ];
-                        window.open(`https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`, "_blank");
-                      }}
-                      className="flex-1 bg-green-500 hover:bg-green-600 text-white rounded-lg py-2 text-xs font-semibold transition"
-                    >
-                      Kirim ke WhatsApp
-                    </button>
-                    <button
-                      onClick={() => setTransferResult(null)}
-                      className="px-3 text-xs text-slate-400 hover:text-slate-600"
-                    >
-                      Tutup
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Destination type */}
-            <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Tujuan</p>
-              <div className="flex gap-2">
-                {(["club", "owner"] as const).map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => { setTransferDestType(t); setTransferDestClubId(""); setTransferDestOwnerId(""); }}
-                    className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${
-                      transferDestType === t
-                        ? "border-orange-500 bg-orange-50 text-orange-700"
-                        : "border-slate-200 text-slate-500 hover:border-slate-300"
-                    }`}
-                  >
-                    {t === "club" ? "Ke Club" : "Ke Owner Lain"}
-                  </button>
-                ))}
-              </div>
-
-              {transferDestType === "club" ? (
-                clubs.length === 0 ? (
-                  <p className="text-xs text-slate-400">Tidak ada club lain.</p>
-                ) : (
-                  <select
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-                    value={transferDestClubId}
-                    onChange={(e) => setTransferDestClubId(e.target.value)}
-                  >
-                    <option value="">— Pilih Club —</option>
-                    {clubs.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                )
-              ) : (
-                <input
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder="ID Owner tujuan"
-                  value={transferDestOwnerId}
-                  onChange={(e) => setTransferDestOwnerId(e.target.value)}
-                />
-              )}
-            </div>
-
-            {/* Payment type */}
-            <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Pembayaran</p>
-              <div className="flex gap-2">
-                {(["bayar", "pinjam"] as const).map((pt) => (
-                  <button
-                    key={pt}
-                    onClick={() => setTransferPaymentType(pt)}
-                    className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${
-                      transferPaymentType === pt
-                        ? "border-blue-500 bg-blue-50 text-blue-700"
-                        : "border-slate-200 text-slate-500 hover:border-slate-300"
-                    }`}
-                  >
-                    {pt === "bayar" ? "Bayar" : "Pinjam"}
-                  </button>
-                ))}
-              </div>
-              {transferPaymentType === "pinjam" && (
-                <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
-                  {transferDestType === "owner"
-                    ? "Pinjam ke owner lain — tidak ada biaya sama sekali."
-                    : "Stok dikirim sekarang, pembayaran dicatat sebagai piutang."}
-                </p>
-              )}
-            </div>
-
-            {/* Summary */}
-            <div className="bg-white rounded-xl border border-slate-200 p-4 flex-1 flex flex-col gap-2">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Ringkasan</p>
-              {transferItems.length === 0 ? (
-                <p className="text-sm text-slate-400 flex-1 flex items-center justify-center text-center">
-                  Isi jumlah produk<br />yang akan dikirim
-                </p>
-              ) : (
-                <div className="space-y-1 flex-1 overflow-y-auto">
-                  {transferItems.map((item) => (
-                    <div key={item.productId} className="flex justify-between text-xs text-slate-600">
-                      <span className="truncate mr-2">{item.quantity}× {item.productName}</span>
-                      <span className="shrink-0 font-medium">{fmtIdr(item.subtotal)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {transferItems.length > 0 && (
-                <div className="border-t border-slate-100 pt-2 flex justify-between">
-                  <span className="text-sm text-slate-500">Total</span>
-                  <span className="text-base font-bold text-slate-900">{fmtIdr(transferTotal)}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Notes */}
-            <input
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm"
-              placeholder="Catatan (opsional)"
-              value={transferNotes}
-              onChange={(e) => setTransferNotes(e.target.value)}
-            />
-
-            {/* Submit */}
-            <button
-              onClick={handleTransfer}
-              disabled={transferring || transferItems.length === 0}
-              className="w-full bg-orange-600 text-white rounded-xl py-4 text-base font-bold hover:bg-orange-700 disabled:opacity-40 transition"
-            >
-              {transferring
-                ? "Memproses…"
-                : transferItems.length === 0
-                ? "Pilih produk dulu"
-                : `Kirim Transfer — ${fmtIdr(transferTotal)}`}
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* ── Kasir tab ── */}
       {/* ── POS Membership tab ── */}
@@ -779,8 +388,14 @@ export default function OwnerPosPage() {
                       {memFilteredCustomers.slice(0, 10).map((c) => (
                         <button
                           key={c.id}
+                          type="button"
                           className="w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-0"
-                          onClick={() => { setMemSelectedCustomer(c); setMemCustomerSearch(c.displayName); setMemShowCustomerDropdown(false); }}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setMemSelectedCustomer(c);
+                            setMemCustomerSearch(c.displayName);
+                            setMemShowCustomerDropdown(false);
+                          }}
                         >
                           <p className="text-sm text-slate-800 font-medium">{c.displayName}</p>
                           <p className="text-xs text-slate-400">{TIER_LABELS[c.tier]}{c.phone ? ` · ${c.phone}` : ""}</p>
@@ -842,13 +457,6 @@ export default function OwnerPosPage() {
 
           {/* Right: payment + confirm */}
           <div className="w-80 shrink-0 flex flex-col gap-3">
-
-            {/* Feedback */}
-            {memFeedback && (
-              <div className={`rounded-xl px-4 py-3 text-sm font-medium ${memFeedback.type === "ok" ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-600"}`}>
-                {memFeedback.msg}
-              </div>
-            )}
 
             {/* Plan summary */}
             <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
@@ -943,6 +551,13 @@ export default function OwnerPosPage() {
               onChange={(e) => setMemNotes(e.target.value)}
             />
 
+            {/* Feedback — shown near the button so it's always visible */}
+            {memFeedback && (
+              <div className={`rounded-xl px-4 py-3 text-sm font-medium ${memFeedback.type === "ok" ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-600"}`}>
+                {memFeedback.msg}
+              </div>
+            )}
+
             {/* Submit */}
             <button
               onClick={handleMemActivate}
@@ -1009,8 +624,14 @@ export default function OwnerPosPage() {
                   {filteredCustomers.slice(0, 10).map((c) => (
                     <button
                       key={c.id}
+                      type="button"
                       className="w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-0"
-                      onClick={() => { setSelectedCustomer(c); setCustomerSearch(c.displayName); setShowCustomerDropdown(false); }}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setSelectedCustomer(c);
+                        setCustomerSearch(c.displayName);
+                        setShowCustomerDropdown(false);
+                      }}
                     >
                       <p className="text-sm text-slate-800 font-medium">{c.displayName}</p>
                       <p className="text-xs text-slate-400">{TIER_LABELS[c.tier]}{c.phone ? ` · ${c.phone}` : ""}</p>

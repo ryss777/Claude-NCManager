@@ -71,7 +71,7 @@ const fmtDate = (iso: string) =>
   new Date(iso).toLocaleString("id-ID", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
 export default function TransferPage() {
-  const { ownerId } = useOwnerAuthStore();
+  const { ownerId, clubId } = useOwnerAuthStore();
   const [tab, setTab] = useState<"keluar" | "masuk">("keluar");
 
   // ─── Shared data ──────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ export default function TransferPage() {
       </div>
 
       {tab === "keluar" ? (
-        <TransferKeluar ownerId={ownerId} clubs={clubs} />
+        <TransferKeluar ownerId={ownerId} sourceClubId={clubId} clubs={clubs} />
       ) : (
         <TransferMasuk ownerId={ownerId} clubs={clubs} />
       )}
@@ -116,8 +116,15 @@ export default function TransferPage() {
 // Transfer Keluar
 // ─────────────────────────────────────────────────────────────────────────────
 
-function TransferKeluar({ ownerId, clubs }: { ownerId: string | undefined; clubs: Club[] }) {
-  const [sourceClubId, setSourceClubId] = useState("");
+function TransferKeluar({
+  ownerId,
+  sourceClubId,
+  clubs,
+}: {
+  ownerId: string | undefined;
+  sourceClubId: string | undefined;
+  clubs: Club[];
+}) {
   const [destType, setDestType] = useState<DestType>("club");
   const [destClubId, setDestClubId] = useState("");
   const [destOwnerId, setDestOwnerId] = useState("");
@@ -127,14 +134,13 @@ function TransferKeluar({ ownerId, clubs }: { ownerId: string | undefined; clubs
 
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loadingInv, setLoadingInv] = useState(false);
-  // qty per item id
   const [qtyMap, setQtyMap] = useState<Record<string, string>>({});
 
   const [submitting, setSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Load inventory when source club changes
+  // Load owner's own inventory automatically
   useEffect(() => {
     if (!ownerId || !sourceClubId) { setInventory([]); return; }
     setLoadingInv(true);
@@ -148,8 +154,8 @@ function TransferKeluar({ ownerId, clubs }: { ownerId: string | undefined; clubs
       .then((snap) => {
         const items = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<InventoryItem, "id">) }))
-          .filter((i) => i.currentStock > 0)
-          .sort((a, b) => a.name.localeCompare(b.name));
+          .filter((i) => (i.currentStock ?? 0) > 0)
+          .sort((a, b) => a.name.localeCompare(b.name, "id"));
         setInventory(items);
       })
       .catch(() => {})
@@ -182,12 +188,11 @@ function TransferKeluar({ ownerId, clubs }: { ownerId: string | undefined; clubs
   const total = cartItems.reduce((s, i) => s + i.subtotal, 0);
 
   async function handleSend() {
-    if (!ownerId || !sourceClubId) { setError("Pilih club sumber"); return; }
+    if (!ownerId || !sourceClubId) { setError("Data club tidak ditemukan"); return; }
     if (destType === "club" && !destClubId) { setError("Pilih club tujuan"); return; }
     if (destType === "owner" && !destOwnerId.trim()) { setError("Masukkan Owner ID tujuan"); return; }
     if (cartItems.length === 0) { setError("Tambahkan setidaknya 1 item"); return; }
 
-    // Validate quantities don't exceed stock
     const overStock = cartItems.find((ci) => {
       const inv = inventory.find((i) => i.id === ci.productId);
       return inv && ci.quantity > inv.currentStock;
@@ -233,6 +238,8 @@ function TransferKeluar({ ownerId, clubs }: { ownerId: string | undefined; clubs
     }
   }
 
+  const sourceClubName = clubs.find((c) => c.id === sourceClubId)?.name ?? sourceClubId ?? "—";
+
   return (
     <div className="max-w-2xl space-y-5">
       {successMsg && (
@@ -251,19 +258,12 @@ function TransferKeluar({ ownerId, clubs }: { ownerId: string | undefined; clubs
         </div>
       )}
 
-      {/* Source club */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Sumber</p>
+      {/* Source info (read-only) */}
+      <div className="bg-slate-50 rounded-xl border border-slate-200 px-4 py-3 flex items-center gap-3">
+        <span className="text-slate-400 text-base">📦</span>
         <div>
-          <label className="block text-sm text-slate-600 mb-1">Club Pengirim</label>
-          <select
-            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-            value={sourceClubId}
-            onChange={(e) => { setSourceClubId(e.target.value); setDestClubId(""); }}
-          >
-            <option value="">— Pilih Club —</option>
-            {clubs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Pengirim (stok Anda)</p>
+          <p className="text-sm font-semibold text-slate-700">{sourceClubName}</p>
         </div>
       </div>
 
@@ -361,54 +361,54 @@ function TransferKeluar({ ownerId, clubs }: { ownerId: string | undefined; clubs
       </div>
 
       {/* Item picker */}
-      {sourceClubId && (
-        <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
-            Pilih Produk ({inventory.length} tersedia)
-          </p>
+      <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+          Pilih Produk {!loadingInv && `(${inventory.length} tersedia)`}
+        </p>
 
-          {loadingInv ? (
-            <p className="text-sm text-slate-400 py-2">Memuat stok…</p>
-          ) : inventory.length === 0 ? (
-            <p className="text-sm text-slate-400 py-2">Tidak ada stok di club ini.</p>
-          ) : (
-            <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-              {inventory.map((item) => {
-                const unitPrice = paymentType === "pinjam" ? 0 : (item.prices[priceTier] ?? 0);
-                const qty = parseInt(qtyMap[item.id] ?? "") || 0;
-                const isOver = qty > item.currentStock;
-                return (
-                  <div
-                    key={item.id}
-                    className={`flex items-center gap-3 rounded-lg px-3 py-2.5 border transition ${
-                      qty > 0 ? "border-brand-200 bg-brand-50" : "border-slate-100 bg-slate-50"
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-slate-800 truncate">{item.name}</p>
-                      <p className="text-xs text-slate-400">
-                        Stok: {item.currentStock} {item.unit}
-                        {paymentType === "bayar" && ` · ${fmtIdr(unitPrice)}`}
-                      </p>
-                    </div>
-                    <input
-                      type="number"
-                      min={0}
-                      max={item.currentStock}
-                      className={`w-20 border rounded-lg px-2 py-1.5 text-sm text-center ${
-                        isOver ? "border-red-400 bg-red-50 text-red-700" : "border-slate-200"
-                      }`}
-                      placeholder="0"
-                      value={qtyMap[item.id] ?? ""}
-                      onChange={(e) => setQty(item.id, e.target.value)}
-                    />
+        {loadingInv ? (
+          <p className="text-sm text-slate-400 py-2">Memuat stok…</p>
+        ) : !sourceClubId ? (
+          <p className="text-sm text-slate-400 py-2">Memuat data club…</p>
+        ) : inventory.length === 0 ? (
+          <p className="text-sm text-slate-400 py-2">Belum ada stok di inventaris Anda.</p>
+        ) : (
+          <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+            {inventory.map((item) => {
+              const unitPrice = paymentType === "pinjam" ? 0 : (item.prices[priceTier] ?? 0);
+              const qty = parseInt(qtyMap[item.id] ?? "") || 0;
+              const isOver = qty > item.currentStock;
+              return (
+                <div
+                  key={item.id}
+                  className={`flex items-center gap-3 rounded-lg px-3 py-2.5 border transition ${
+                    qty > 0 ? "border-brand-200 bg-brand-50" : "border-slate-100 bg-slate-50"
+                  }`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-800 truncate">{item.name}</p>
+                    <p className="text-xs text-slate-400">
+                      Stok: {item.currentStock} {item.unit}
+                      {paymentType === "bayar" && ` · ${fmtIdr(unitPrice)}`}
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+                  <input
+                    type="number"
+                    min={0}
+                    max={item.currentStock}
+                    className={`w-20 border rounded-lg px-2 py-1.5 text-sm text-center ${
+                      isOver ? "border-red-400 bg-red-50 text-red-700" : "border-slate-200"
+                    }`}
+                    placeholder="0"
+                    value={qtyMap[item.id] ?? ""}
+                    onChange={(e) => setQty(item.id, e.target.value)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Notes */}
       <div className="bg-white rounded-xl border border-slate-200 p-4">

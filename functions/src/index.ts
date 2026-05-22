@@ -5,6 +5,9 @@ admin.initializeApp();
 // Catalog Engine
 export * from "./catalog/catalog.functions";
 
+// Club Engine
+export * from "./club/club.recipes.functions";
+
 // Transaction Engine
 export * from "./transaction/pos.functions";
 export * from "./transaction/owner.pos.functions";

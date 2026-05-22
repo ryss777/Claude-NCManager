@@ -6,7 +6,14 @@ import { ownerSaleSchema } from "@nc-manager/validation";
 import { COLLECTIONS, ACCOUNT_CODES } from "@nc-manager/shared-constants";
 import type { AccountCode } from "@nc-manager/shared-types";
 import { writeJournalEntry } from "../finance/finance.helpers";
-import { readInventorySnaps, writeInventoryMovements } from "../inventory/inventory.helpers";
+import {
+  readInventorySnaps,
+  writeInventoryMovements,
+  loadRecipesForItems,
+  buildIngredientDeductions,
+  readIngredientSnaps,
+  writeIngredientDeductions,
+} from "../inventory/inventory.helpers";
 
 // ── pos_ownerSale ─────────────────────────────────────────────────────────────
 //
@@ -40,8 +47,15 @@ export const pos_ownerSale = onCall(async (request) => {
     ? payload.items[0]!.productName
     : `${payload.items.length} produk`;
 
+  // Pre-load recipes for ingredient deduction
+  const recipeMap = await loadRecipesForItems(ownerId, clubId, payload.items);
+  const ingredientDeductions = buildIngredientDeductions(payload.items, recipeMap);
+
   await db.runTransaction(async (tx) => {
     const invSnaps = await readInventorySnaps(tx, ownerId, clubId, payload.items);
+    const ingSnaps = ingredientDeductions.length > 0
+      ? await readIngredientSnaps(tx, ownerId, clubId, ingredientDeductions)
+      : [];
 
     tx.set(txRef, {
       id: txRef.id,
@@ -132,6 +146,20 @@ export const pos_ownerSale = onCall(async (request) => {
       now,
       movementType: "sale",
     });
+
+    if (ingredientDeductions.length > 0) {
+      writeIngredientDeductions(tx, {
+        ownerId, clubId,
+        ingredients: ingredientDeductions,
+        ingSnaps,
+        transactionId: txRef.id,
+        baseOperationId: operationId,
+        operatorId: request.auth!.uid,
+        requestId: payload.requestId,
+        now,
+        movementType: "sale",
+      });
+    }
 
     await markOperationComplete(tx, operationId, idempotencyPath, {
       transactionId: txRef.id,

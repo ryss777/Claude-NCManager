@@ -37,4 +37,6 @@ export const COLLECTIONS = {
     `owners/${ownerId}/notifications`,
   DEBTS: (ownerId: string, clubId: string) =>
     `owners/${ownerId}/clubs/${clubId}/debts`,
+  RECIPES: (ownerId: string, clubId: string) =>
+    `owners/${ownerId}/clubs/${clubId}/recipes`,
 } as const;

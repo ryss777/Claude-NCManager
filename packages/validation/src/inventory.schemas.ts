@@ -65,6 +65,14 @@ export const createInventoryItemSchema = tenantRefSchema.extend({
   minimumStock: z.number().min(0).default(0),
 });
 
+// Ingredients don't have sale prices and use free-form units (gram, ml, scoops, …)
+export const createIngredientSchema = tenantRefSchema.extend({
+  name: z.string().min(1).max(100),
+  unit: z.string().min(1).max(20),
+  category: z.string().max(50).nullish(),
+  minimumStock: z.number().min(0).default(0),
+});
+
 export const removeInventoryItemSchema = tenantRefSchema.extend({
   inventoryItemId: z.string().min(1),
   force: z.boolean().default(false),

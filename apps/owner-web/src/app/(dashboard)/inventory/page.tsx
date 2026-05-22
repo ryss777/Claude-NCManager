@@ -27,8 +27,6 @@ interface CatalogProduct {
   id: string; name: string; category: string; prices: PriceTiers;
 }
 
-interface ClubOption { id: string; name: string; }
-
 interface InventoryMovement {
   id: string;
   inventoryItemId: string;
@@ -51,19 +49,6 @@ interface Replenishment {
   createdAt: string;
 }
 
-interface ProductTransfer {
-  id: string;
-  destinationType: "club" | "owner";
-  destinationClubId?: string;
-  destinationOwnerId?: string;
-  paymentType: "bayar" | "pinjam";
-  priceTier: string;
-  items: { productName: string; quantity: number; subtotal: number }[];
-  total: number;
-  status: string;
-  notes: string | null;
-  createdAt: string;
-}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -257,7 +242,7 @@ function StockTable({
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-type PageTab = "owner" | "restock" | "movements" | "transfers" | "clubs";
+type PageTab = "owner" | "restock" | "movements";
 
 export default function InventoryPage() {
   const { ownerId, clubId } = useOwnerAuthStore();
@@ -553,112 +538,12 @@ export default function InventoryPage() {
     [movements, movementTypeFilter]
   );
 
-  // ── Tab: transfers ──────────────────────────────────────────────────────────
-
-  const [transfers, setTransfers] = useState<ProductTransfer[]>([]);
-  const [loadingTransfers, setLoadingTransfers] = useState(false);
-  const [transferFilter, setTransferFilter] = useState<"all" | "pending">("all");
-
-  const [acceptTransferId, setAcceptTransferId] = useState("");
-  const [acceptSourceOwnerId, setAcceptSourceOwnerId] = useState("");
-  const [acceptClubId, setAcceptClubId] = useState("");
-  const [accepting, setAccepting] = useState(false);
-  const [acceptFeedback, setAcceptFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
-
-  async function loadTransfers() {
-    if (!ownerId) return;
-    setLoadingTransfers(true);
-    const snap = await getDocs(
-      query(
-        collection(firebaseDb(), `owners/${ownerId}/productTransfers`),
-        orderBy("createdAt", "desc"),
-        limit(50)
-      )
-    );
-    setTransfers(snap.docs.map((d) => ({ id: d.id, ...d.data() } as ProductTransfer)));
-    setLoadingTransfers(false);
-  }
-
-  useEffect(() => {
-    if (activeTab === "transfers") loadTransfers();
-  }, [activeTab, ownerId]);
-
-  const filteredTransfers = useMemo(() =>
-    transferFilter === "pending"
-      ? transfers.filter((t) => t.status === "pending_acceptance")
-      : transfers,
-    [transfers, transferFilter]
-  );
-
-  async function handleAcceptTransfer() {
-    if (!acceptTransferId.trim() || !acceptSourceOwnerId.trim() || !acceptClubId.trim()) {
-      setAcceptFeedback({ type: "err", msg: "Isi semua field terlebih dahulu" });
-      return;
-    }
-    setAccepting(true); setAcceptFeedback(undefined);
-    try {
-      await callFunction("productTransfer_accept", {
-        ownerId,
-        sourceOwnerId: acceptSourceOwnerId.trim(),
-        transferId: acceptTransferId.trim(),
-        destinationClubId: acceptClubId.trim(),
-        requestId: uuidv4(),
-        operationId: uuidv4(),
-      });
-      setAcceptFeedback({ type: "ok", msg: "Transfer berhasil diterima. Stok sudah diperbarui." });
-      setAcceptTransferId(""); setAcceptSourceOwnerId(""); setAcceptClubId("");
-      loadTransfers();
-      loadItems();
-    } catch (err) {
-      setAcceptFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal menerima transfer" });
-    } finally { setAccepting(false); }
-  }
-
-  // ── Tab: clubs ──────────────────────────────────────────────────────────────
-
-  const [clubs, setClubs] = useState<ClubOption[]>([]);
-  const [selectedClubId, setSelectedClubId] = useState("");
-  const [clubItems, setClubItems] = useState<InventoryItem[]>([]);
-  const [loadingClubs, setLoadingClubs] = useState(false);
-  const [loadingClubItems, setLoadingClubItems] = useState(false);
-  const [clubSort, setClubSort] = useState<SortState>(null);
-
-  async function loadClubs() {
-    if (!ownerId) return;
-    setLoadingClubs(true);
-    const snap = await getDocs(collection(firebaseDb(), `owners/${ownerId}/clubs`));
-    const list = snap.docs.map((d) => ({ id: d.id, name: d.data()["name"] as string }));
-    setClubs(list);
-    if (list.length > 0 && !selectedClubId) setSelectedClubId(list[0]!.id);
-    setLoadingClubs(false);
-  }
-
-  async function loadClubItems(cId: string) {
-    if (!ownerId || !cId) return;
-    setLoadingClubItems(true);
-    const snap = await getDocs(
-      query(collection(firebaseDb(), `owners/${ownerId}/clubs/${cId}/inventoryItems`), orderBy("name"))
-    );
-    setClubItems(snap.docs.map((d) => ({ id: d.id, ...d.data() } as InventoryItem)));
-    setLoadingClubItems(false);
-  }
-
-  useEffect(() => {
-    if (activeTab === "clubs" && clubs.length === 0) loadClubs();
-  }, [activeTab, ownerId]);
-
-  useEffect(() => {
-    if (selectedClubId) { setClubSort(null); loadClubItems(selectedClubId); }
-  }, [selectedClubId]);
-
   // ── Render ──────────────────────────────────────────────────────────────────
 
   const TABS: { key: PageTab; label: string }[] = [
     { key: "owner",     label: "Produk & Stok" },
     { key: "restock",   label: "Restok" },
     { key: "movements", label: "Pergerakan Stok" },
-    { key: "transfers", label: "Transfer" },
-    { key: "clubs",     label: "Stok Club" },
   ];
 
   return (
@@ -1148,192 +1033,6 @@ export default function InventoryPage() {
               </table>
             )}
           </div>
-        </div>
-      )}
-
-      {/* ── Tab: Transfer ── */}
-      {activeTab === "transfers" && (
-        <div className="flex gap-6">
-          {/* Left: transfer history */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex gap-2">
-                {([["all", "Semua"], ["pending", "Menunggu Konfirmasi"]] as [string, string][]).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => setTransferFilter(key as "all" | "pending")}
-                    className={`px-4 py-1.5 rounded-full text-xs font-medium border transition ${
-                      transferFilter === key
-                        ? "bg-slate-800 text-white border-slate-800"
-                        : "border-slate-200 text-slate-500 hover:border-slate-400"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <button onClick={loadTransfers} className="text-xs text-blue-600 hover:underline">Refresh</button>
-            </div>
-
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-              {loadingTransfers ? (
-                <p className="text-sm text-slate-400 p-4">Memuat…</p>
-              ) : filteredTransfers.length === 0 ? (
-                <p className="text-sm text-slate-400 p-4">Tidak ada data transfer.</p>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-slate-500 text-xs">
-                    <tr>
-                      <th className="px-4 py-2 text-left">Tanggal</th>
-                      <th className="px-4 py-2 text-left">Tujuan</th>
-                      <th className="px-4 py-2 text-left">Produk</th>
-                      <th className="px-4 py-2 text-left">Jenis</th>
-                      <th className="px-4 py-2 text-right">Total</th>
-                      <th className="px-4 py-2 text-left">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredTransfers.map((t) => (
-                      <tr key={t.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-2 text-slate-400 text-xs whitespace-nowrap">
-                          {t.createdAt?.slice(0, 16).replace("T", " ")}
-                        </td>
-                        <td className="px-4 py-2 text-xs text-slate-600">
-                          {t.destinationType === "club"
-                            ? `Club: ${(t.destinationClubId ?? "").slice(0, 8)}`
-                            : `Owner: ${(t.destinationOwnerId ?? "").slice(0, 8)}`}
-                        </td>
-                        <td className="px-4 py-2 text-xs text-slate-500 max-w-xs truncate">
-                          {t.items?.map((i) => `${i.productName} ×${i.quantity}`).join(", ")}
-                        </td>
-                        <td className="px-4 py-2">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${t.paymentType === "pinjam" ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700"}`}>
-                            {t.paymentType === "bayar" ? "Bayar" : "Pinjam"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2 text-right font-semibold text-slate-800 text-xs">
-                          {t.paymentType === "pinjam" && t.destinationType === "owner" ? "Rp 0" : fmt(t.total)}
-                        </td>
-                        <td className="px-4 py-2">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                            t.status === "completed" ? "bg-green-50 text-green-700" :
-                            t.status === "pending_acceptance" ? "bg-amber-50 text-amber-700" :
-                            "bg-slate-100 text-slate-500"
-                          }`}>
-                            {t.status === "completed" ? "Selesai" : t.status === "pending_acceptance" ? "Menunggu" : t.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-
-          {/* Right: accept incoming transfer */}
-          <div className="w-72 shrink-0">
-            <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <h3 className="font-semibold text-slate-800 mb-1">Terima Transfer Masuk</h3>
-              <p className="text-xs text-slate-400 mb-4">Konfirmasi transfer dari owner lain menggunakan ID yang dikirimkan pengirim.</p>
-
-              {acceptFeedback && (
-                <div className={`mb-3 text-sm rounded-lg px-3 py-2 ${acceptFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                  {acceptFeedback.msg}
-                </div>
-              )}
-
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs text-slate-500 mb-1 block">ID Transfer</label>
-                  <input
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
-                    placeholder="Transfer ID dari pengirim"
-                    value={acceptTransferId}
-                    onChange={(e) => setAcceptTransferId(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500 mb-1 block">ID Owner Pengirim</label>
-                  <input
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
-                    placeholder="Owner ID pengirim"
-                    value={acceptSourceOwnerId}
-                    onChange={(e) => setAcceptSourceOwnerId(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500 mb-1 block">Club Tujuan</label>
-                  <select
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-                    value={acceptClubId}
-                    onChange={(e) => setAcceptClubId(e.target.value)}
-                  >
-                    <option value="">— Pilih Club —</option>
-                    {clubs.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  onClick={handleAcceptTransfer}
-                  disabled={accepting || !acceptTransferId || !acceptSourceOwnerId || !acceptClubId}
-                  className="w-full bg-teal-600 text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-teal-700 disabled:opacity-40 transition"
-                >
-                  {accepting ? "Memproses…" : "Terima Transfer"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Tab: Stok Club ── */}
-      {activeTab === "clubs" && (
-        <div>
-          <div className="flex items-center gap-3 mb-4">
-            {loadingClubs ? (
-              <span className="text-sm text-slate-400">Memuat clubs…</span>
-            ) : clubs.length === 0 ? (
-              <span className="text-sm text-slate-400">Tidak ada club ditemukan.</span>
-            ) : (
-              <>
-                <span className="text-sm font-medium text-slate-600">Club:</span>
-                <div className="flex gap-2 flex-wrap">
-                  {clubs.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => setSelectedClubId(c.id)}
-                      className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
-                        selectedClubId === c.id
-                          ? "bg-slate-800 text-white border-slate-800"
-                          : "border-slate-200 text-slate-600 hover:border-slate-400"
-                      }`}
-                    >
-                      {c.name}
-                    </button>
-                  ))}
-                </div>
-                <button onClick={() => loadClubItems(selectedClubId)} className="text-xs text-blue-600 hover:underline ml-auto">Refresh</button>
-              </>
-            )}
-          </div>
-
-          {selectedClubId && (
-            <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <h3 className="font-semibold text-slate-800">
-                  Stok — {clubs.find((c) => c.id === selectedClubId)?.name}
-                </h3>
-              </div>
-              <StockTable
-                items={clubItems}
-                loading={loadingClubItems}
-                sort={clubSort}
-                onSort={(col) => setClubSort((p) => cycleSort(p, col))}
-              />
-            </div>
-          )}
         </div>
       )}
 

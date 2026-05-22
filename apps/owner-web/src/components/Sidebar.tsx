@@ -12,6 +12,7 @@ const NAV = [
   { href: "/customers", label: "Pelanggan", icon: "🧑‍🤝‍🧑" },
   { href: "/membership", label: "Paket Member", icon: "⭐" },
   { href: "/inventory", label: "Produk & Stok", icon: "📦" },
+  { href: "/club",      label: "Manajemen Club", icon: "🏋️" },
   { href: "/operators", label: "Operator", icon: "👤" },
   { href: "/devices", label: "Device", icon: "📱" },
   { href: "/transactions", label: "Riwayat Transaksi", icon: "🧾" },

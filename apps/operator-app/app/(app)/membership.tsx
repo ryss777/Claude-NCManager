@@ -8,6 +8,8 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { collection, getDocs, query, where, limit } from "firebase/firestore";
@@ -96,13 +98,15 @@ export default function MembershipScreen() {
   const [recordingVisit, setRecordingVisit] = useState(false);
 
   const filteredCustomers =
-    customerSearch.length >= 2
-      ? customers.filter(
-          (c) =>
-            c.displayName.toLowerCase().includes(customerSearch.toLowerCase()) ||
-            (c.phone ?? "").includes(customerSearch)
-        )
-      : [];
+    customerSearch.length >= 1
+      ? customers
+          .filter(
+            (c) =>
+              c.displayName.toLowerCase().includes(customerSearch.toLowerCase()) ||
+              (c.phone ?? "").includes(customerSearch)
+          )
+          .slice(0, 10)
+      : customers.slice(0, 10);
 
   useEffect(() => {
     if (!ownerId || !clubId) return;
@@ -305,6 +309,7 @@ export default function MembershipScreen() {
         {loadingData && <ActivityIndicator size="small" color="#94a3b8" />}
       </View>
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
         {/* ── Customer search ── */}
@@ -331,9 +336,10 @@ export default function MembershipScreen() {
             <View>
               <TextInput
                 style={styles.input}
-                placeholder="Ketik nama / no. HP (min 2 karakter)"
+                placeholder="Cari nama / no. HP pelanggan"
                 value={customerSearch}
                 onChangeText={(v) => { setCustomerSearch(v); setShowDropdown(true); }}
+                onFocus={() => setShowDropdown(true)}
               />
               {showDropdown && filteredCustomers.length > 0 && (
                 <View style={styles.dropdown}>
@@ -575,6 +581,7 @@ export default function MembershipScreen() {
 
         <View style={{ height: 24 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

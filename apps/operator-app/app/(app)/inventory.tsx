@@ -8,6 +8,8 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
@@ -177,6 +179,7 @@ export default function InventoryScreen() {
         {loadingItems && <ActivityIndicator size="small" color="#94a3b8" />}
       </View>
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
         {/* ── Low-stock warning ── */}
@@ -343,6 +346,7 @@ export default function InventoryScreen() {
 
         <View style={{ height: 24 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

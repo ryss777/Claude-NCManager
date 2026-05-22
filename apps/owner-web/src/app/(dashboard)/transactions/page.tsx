@@ -49,6 +49,8 @@ interface MembershipTx {
   activatedAt: string | null;
   status: string;
   debtId: string | null;
+  createdBy: string | null;
+  operatorId: string | null;
 }
 
 type HistoryItem = ProductTx | MembershipTx;
@@ -72,10 +74,14 @@ export default function TransactionsPage() {
 
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [customers, setCustomers] = useState<Record<string, string>>({});
+  const [operators, setOperators] = useState<Record<string, string>>({});
   const [debtRemaining, setDebtRemaining] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<HistoryItem | null>(null);
   const [typeFilter, setTypeFilter] = useState<"all" | "product" | "membership">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   // Reversal
   const [reverseDialog, setReverseDialog] = useState<{ transactionId: string; total: number } | null>(null);
@@ -90,11 +96,12 @@ export default function TransactionsPage() {
       const db = firebaseDb();
       const base = `owners/${ownerId}/clubs/${clubId}`;
 
-      const [txSnap, memSnap, custSnap, debtSnap] = await Promise.all([
+      const [txSnap, memSnap, custSnap, debtSnap, opSnap] = await Promise.all([
         getDocs(query(collection(db, `${base}/transactions`), orderBy("createdAt", "desc"))),
         getDocs(query(collection(db, `${base}/memberships`), orderBy("createdAt", "desc"))),
         getDocs(collection(db, `${base}/customers`)),
         getDocs(collection(db, `${base}/debts`)),
+        getDocs(collection(db, `${base}/operators`)),
       ]);
 
       const custMap: Record<string, string> = {};
@@ -102,6 +109,12 @@ export default function TransactionsPage() {
         custMap[d.id] = (d.data()["displayName"] as string) ?? d.id;
       });
       setCustomers(custMap);
+
+      const opMap: Record<string, string> = {};
+      opSnap.docs.forEach((d) => {
+        opMap[d.id] = (d.data()["displayName"] as string) ?? d.id;
+      });
+      setOperators(opMap);
 
       const debtMap: Record<string, number> = {};
       debtSnap.docs.forEach((d) => {
@@ -128,7 +141,33 @@ export default function TransactionsPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const filtered = typeFilter === "all" ? items : items.filter((i) => i.kind === typeFilter);
+  const filtered = items.filter((item) => {
+    // type filter
+    if (typeFilter !== "all" && item.kind !== typeFilter) return false;
+
+    // customer name search
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const name = item.customerId ? (customers[item.customerId] ?? "").toLowerCase() : "";
+      const extra = item.kind === "product"
+        ? item.items?.map((i) => i.productName.toLowerCase()).join(" ") ?? ""
+        : item.planName?.toLowerCase() ?? "";
+      if (!name.includes(q) && !extra.includes(q)) return false;
+    }
+
+    // date range
+    const ts = new Date(item.createdAt).getTime();
+    if (dateFrom) {
+      if (ts < new Date(dateFrom).getTime()) return false;
+    }
+    if (dateTo) {
+      const end = new Date(dateTo);
+      end.setHours(23, 59, 59, 999);
+      if (ts > end.getTime()) return false;
+    }
+
+    return true;
+  });
 
   async function handleReverse() {
     if (!reverseDialog || !ownerId || !clubId) return;
@@ -154,6 +193,29 @@ export default function TransactionsPage() {
     } finally {
       setReversing(false);
     }
+  }
+
+  const hasActiveFilter = searchQuery.trim() !== "" || dateFrom !== "" || dateTo !== "";
+  function clearFilters() {
+    setSearchQuery("");
+    setDateFrom("");
+    setDateTo("");
+  }
+
+  function creatorBadge(createdBy: string | null, operatorId: string | null) {
+    if (createdBy === "owner" || (!createdBy && !operatorId)) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-100 text-violet-700">
+          👑 Owner
+        </span>
+      );
+    }
+    const name = operatorId ? (operators[operatorId] ?? "Operator") : "Operator";
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700">
+        🧑‍💼 {name}
+      </span>
+    );
   }
 
   return (
@@ -216,7 +278,7 @@ export default function TransactionsPage() {
         </div>
 
         {/* Filter */}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
           {([
             { key: "all",        label: "Semua" },
             { key: "product",    label: "Penjualan Produk" },
@@ -236,10 +298,73 @@ export default function TransactionsPage() {
           ))}
         </div>
 
+        {/* Search & date range */}
+        <div className="flex flex-wrap gap-3 items-center">
+          {/* Customer name search */}
+          <div className="relative flex-1 min-w-52">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">🔍</span>
+            <input
+              type="text"
+              placeholder="Cari nama pelanggan atau produk…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+
+          {/* Date from */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs text-slate-400 whitespace-nowrap">Dari</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+
+          {/* Date to */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-xs text-slate-400 whitespace-nowrap">Sampai</label>
+            <input
+              type="date"
+              value={dateTo}
+              min={dateFrom || undefined}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+
+          {/* Clear filters */}
+          {hasActiveFilter && (
+            <button
+              onClick={clearFilters}
+              className="text-xs text-slate-400 hover:text-slate-700 transition flex items-center gap-1"
+            >
+              ✕ Reset
+            </button>
+          )}
+
+          {/* Result count */}
+          <span className="text-xs text-slate-400 ml-auto whitespace-nowrap">
+            {filtered.length} transaksi
+          </span>
+        </div>
+
         {/* Table */}
         {filtered.length === 0 && !loading ? (
-          <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
-            Belum ada transaksi.
+          <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400 text-sm py-16">
+            {hasActiveFilter || typeFilter !== "all" ? (
+              <>
+                <span className="text-2xl">🔍</span>
+                <p>Tidak ada transaksi yang cocok.</p>
+                <button onClick={() => { clearFilters(); setTypeFilter("all"); }} className="text-blue-500 hover:underline text-xs">
+                  Reset semua filter
+                </button>
+              </>
+            ) : (
+              <p>Belum ada transaksi.</p>
+            )}
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -248,6 +373,7 @@ export default function TransactionsPage() {
                 <tr>
                   <th className="px-4 py-3 text-left">Waktu</th>
                   <th className="px-4 py-3 text-left">Jenis</th>
+                  <th className="px-4 py-3 text-left">Dibuat oleh</th>
                   <th className="px-4 py-3 text-left">Pelanggan</th>
                   <th className="px-4 py-3 text-left">Ringkasan</th>
                   <th className="px-4 py-3 text-right">Jumlah</th>
@@ -273,6 +399,7 @@ export default function TransactionsPage() {
                         <td className="px-4 py-3">
                           <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">Produk</span>
                         </td>
+                        <td className="px-4 py-3">{creatorBadge(item.createdBy, item.operatorId)}</td>
                         <td className="px-4 py-3 font-medium text-slate-800">{customerName}</td>
                         <td className="px-4 py-3 text-slate-500 truncate max-w-xs">{summary}</td>
                         <td className="px-4 py-3 text-right font-semibold text-slate-800">{fmtIdr(item.total)}</td>
@@ -298,6 +425,7 @@ export default function TransactionsPage() {
                       <td className="px-4 py-3">
                         <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">Membership</span>
                       </td>
+                      <td className="px-4 py-3">{creatorBadge(item.createdBy ?? null, item.operatorId ?? null)}</td>
                       <td className="px-4 py-3 font-medium text-slate-800">{customerName}</td>
                       <td className="px-4 py-3 text-slate-500 truncate max-w-xs">{item.planName}</td>
                       <td className="px-4 py-3 text-right text-slate-400 text-xs">—</td>
@@ -351,6 +479,14 @@ export default function TransactionsPage() {
                 ) : (
                   <p className="text-slate-500">Walk-in (tanpa akun)</p>
                 )}
+              </div>
+
+              {/* Creator */}
+              <div>
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Dibuat oleh</p>
+                {selected.kind === "product"
+                  ? creatorBadge(selected.createdBy, selected.operatorId)
+                  : creatorBadge(selected.createdBy ?? null, selected.operatorId ?? null)}
               </div>
 
               {/* Product detail */}

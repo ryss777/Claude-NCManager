@@ -8,6 +8,8 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { collection, query, where, onSnapshot, limit } from "firebase/firestore";
@@ -177,6 +179,7 @@ export default function ShiftScreen() {
     <SafeAreaView style={styles.container}>
       <Text style={styles.title}>Manajemen Shift</Text>
 
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
         {/* Shift summary after close */}
@@ -294,6 +297,7 @@ export default function ShiftScreen() {
           </View>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
