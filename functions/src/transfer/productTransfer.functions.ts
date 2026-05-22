@@ -165,29 +165,21 @@ export const productTransfer_create = onCall(async (request) => {
       tx.update(snap.ref, { currentStock: stockAfter, updatedAt: now });
     }
 
-    // 4. Increment destination inventory (same-owner club only)
+    // 4. Increment/create destination inventory (same-owner club only)
     if (isInternal) {
       for (let i = 0; i < items.length; i++) {
         const item = items[i]!;
         if (!item.productCatalogId) continue;
 
         const destSnap = destSnaps.get(item.productCatalogId);
-        if (!destSnap || !destSnap.exists) continue;
-
-        const currentStock = destSnap.data()!["currentStock"] as number;
-        const stockAfter = currentStock + item.quantity;
-
         const movRef = db.collection(COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, destinationClubId!)).doc();
-        tx.set(movRef, {
+        const movBase = {
           id: movRef.id,
           ownerId,
           clubId: destinationClubId,
-          inventoryItemId: destSnap.id,
           itemName: item.productName,
           movementType: "transfer_in",
           quantity: item.quantity,
-          stockBefore: currentStock,
-          stockAfter,
           unitCost: item.unitPrice,
           totalCost: item.subtotal,
           referenceId: transferRef.id,
@@ -197,8 +189,50 @@ export const productTransfer_create = onCall(async (request) => {
           requestId: payload.requestId,
           operationId: `${operationId}_in_${i}`,
           createdAt: now,
-        });
-        tx.update(destSnap.ref, { currentStock: stockAfter, updatedAt: now });
+        };
+
+        if (!destSnap || !destSnap.exists) {
+          // Club doesn't have this product yet — create it and seed with transferred qty
+          const srcSnap = sourceSnaps[i];
+          if (!srcSnap || !srcSnap.exists) continue;
+          const srcData = srcSnap.data()!;
+
+          const newItemRef = db
+            .collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, destinationClubId!))
+            .doc();
+          tx.set(newItemRef, {
+            id: newItemRef.id,
+            ownerId,
+            clubId: destinationClubId,
+            productCatalogId: item.productCatalogId,
+            name: item.productName,
+            category: srcData["category"] ?? null,
+            prices: srcData["prices"] ?? null,
+            unit: srcData["unit"] ?? "pcs",
+            currentStock: item.quantity,
+            minimumStock: 0,
+            isActive: true,
+            createdAt: now,
+            updatedAt: now,
+          });
+          tx.set(movRef, {
+            ...movBase,
+            inventoryItemId: newItemRef.id,
+            stockBefore: 0,
+            stockAfter: item.quantity,
+          });
+        } else {
+          // Club already has this product — increment stock
+          const currentStock = destSnap.data()!["currentStock"] as number;
+          const stockAfter = currentStock + item.quantity;
+          tx.set(movRef, {
+            ...movBase,
+            inventoryItemId: destSnap.id,
+            stockBefore: currentStock,
+            stockAfter,
+          });
+          tx.update(destSnap.ref, { currentStock: stockAfter, updatedAt: now });
+        }
       }
     }
 
@@ -297,6 +331,19 @@ export const productTransfer_accept = onCall(async (request) => {
     }
   }
 
+  // Pre-fetch catalog details for items the club doesn't have yet
+  // (needed to populate unit/category/prices when creating new club items)
+  const missingCatalogIds = catalogIds.filter((id) => !destItemMap.has(id));
+  const catalogDataMap = new Map<string, FirebaseFirestore.DocumentData>();
+  if (missingCatalogIds.length > 0) {
+    await Promise.all(
+      missingCatalogIds.map(async (catalogId) => {
+        const snap = await db.collection(COLLECTIONS.PRODUCT_CATALOG).doc(catalogId).get();
+        if (snap.exists) catalogDataMap.set(catalogId, snap.data()!);
+      })
+    );
+  }
+
   await db.runTransaction(async (tx) => {
     // Pre-read destination items
     const destSnapsInTx = new Map<string, FirebaseFirestore.DocumentSnapshot>();
@@ -304,30 +351,22 @@ export const productTransfer_accept = onCall(async (request) => {
       destSnapsInTx.set(catalogId, await tx.get(ref));
     }
 
-    // 1. Increment destination stock + write movements
+    // 1. Increment/create destination stock + write movements
     for (let i = 0; i < items.length; i++) {
       const item = items[i]!;
       if (!item.productCatalogId) continue;
 
       const destSnap = destSnapsInTx.get(item.productCatalogId);
-      if (!destSnap || !destSnap.exists) continue;
-
-      const currentStock = destSnap.data()!["currentStock"] as number;
-      const stockAfter = currentStock + item.quantity;
-
       const movRef = db
         .collection(COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, destinationClubId))
         .doc();
-      tx.set(movRef, {
+      const movBase = {
         id: movRef.id,
         ownerId,
         clubId: destinationClubId,
-        inventoryItemId: destSnap.id,
         itemName: item.productName,
         movementType: "transfer_in",
         quantity: item.quantity,
-        stockBefore: currentStock,
-        stockAfter,
         unitCost: item.unitPrice,
         totalCost: item.subtotal,
         referenceId: transferId,
@@ -337,8 +376,37 @@ export const productTransfer_accept = onCall(async (request) => {
         requestId: payload.requestId,
         operationId: `${operationId}_in_${i}`,
         createdAt: now,
-      });
-      tx.update(destSnap.ref, { currentStock: stockAfter, updatedAt: now });
+      };
+
+      if (!destSnap || !destSnap.exists) {
+        // Club doesn't have this item yet — create it
+        const catData = catalogDataMap.get(item.productCatalogId);
+        const newItemRef = db
+          .collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, destinationClubId))
+          .doc();
+        tx.set(newItemRef, {
+          id: newItemRef.id,
+          ownerId,
+          clubId: destinationClubId,
+          productCatalogId: item.productCatalogId,
+          name: item.productName,
+          category: catData?.["category"] ?? null,
+          prices: catData?.["prices"] ?? null,
+          unit: catData?.["unit"] ?? "pcs",
+          currentStock: item.quantity,
+          minimumStock: 0,
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        });
+        tx.set(movRef, { ...movBase, inventoryItemId: newItemRef.id, stockBefore: 0, stockAfter: item.quantity });
+      } else {
+        // Club already has this item — increment stock
+        const currentStock = destSnap.data()!["currentStock"] as number;
+        const stockAfter = currentStock + item.quantity;
+        tx.set(movRef, { ...movBase, inventoryItemId: destSnap.id, stockBefore: currentStock, stockAfter });
+        tx.update(destSnap.ref, { currentStock: stockAfter, updatedAt: now });
+      }
     }
 
     // 2. Mark transfer as completed
