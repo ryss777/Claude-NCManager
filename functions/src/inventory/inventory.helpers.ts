@@ -18,16 +18,17 @@ export interface IngredientDeductionRef {
 /**
  * Pre-reads inventory item snapshots inside a transaction.
  * Must be called BEFORE any writes in the transaction body.
+ *
+ * @param itemsPath - Firestore collection path (e.g. OWNER_INVENTORY_ITEMS or INVENTORY_ITEMS)
  */
 export async function readInventorySnaps(
   tx: FirebaseFirestore.Transaction,
-  ownerId: string,
-  clubId: string,
+  itemsPath: string,
   items: SaleItemRef[]
 ): Promise<FirebaseFirestore.DocumentSnapshot[]> {
   return Promise.all(
     items.map((item) =>
-      tx.get(db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc(item.productId))
+      tx.get(db.collection(itemsPath).doc(item.productId))
     )
   );
 }
@@ -172,10 +173,14 @@ export function writeIngredientDeductions(
 /**
  * Writes inventory movement records and updates currentStock for each item.
  * Uses pre-read snapshots (from readInventorySnaps) — no reads performed here.
+ *
+ * @param params.movementsPath - Firestore collection path for movement records
+ *   (e.g. OWNER_INVENTORY_MOVEMENTS(ownerId) or INVENTORY_MOVEMENTS(ownerId, clubId))
  */
 export function writeInventoryMovements(
   tx: FirebaseFirestore.Transaction,
   params: {
+    movementsPath: string;
     ownerId: string;
     clubId: string;
     items: SaleItemRef[];
@@ -189,7 +194,7 @@ export function writeInventoryMovements(
   }
 ): void {
   const {
-    ownerId, clubId, items, invSnaps,
+    movementsPath, ownerId, clubId, items, invSnaps,
     transactionId, baseOperationId, operatorId, requestId, now, movementType,
   } = params;
 
@@ -203,7 +208,7 @@ export function writeInventoryMovements(
     const currentStock = snap.data()!["currentStock"] as number;
     const stockAfter = isReturn ? currentStock + item.quantity : currentStock - item.quantity;
 
-    const movementRef = db.collection(COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, clubId)).doc();
+    const movementRef = db.collection(movementsPath).doc();
 
     tx.set(movementRef, {
       id: movementRef.id,

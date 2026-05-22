@@ -26,7 +26,7 @@ export const productTransfer_create = onCall(async (request) => {
     paymentType, priceTier, items, notes,
   } = payload;
 
-  const idempotencyPath = `owners/${ownerId}/clubs/${sourceClubId}/_idempotency`;
+  const idempotencyPath = `owners/${ownerId}/_idempotency`;
   const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
   throwIfDuplicate(isDuplicate, operationId);
 
@@ -35,9 +35,6 @@ export const productTransfer_create = onCall(async (request) => {
   }
   if (destinationType === "owner" && !destinationOwnerId) {
     throw new HttpsError("invalid-argument", "destinationOwnerId required for owner transfer");
-  }
-  if (destinationType === "club" && destinationClubId === sourceClubId) {
-    throw new HttpsError("invalid-argument", "Source and destination club cannot be the same");
   }
 
   const total = items.reduce((sum, item) => sum + item.subtotal, 0);
@@ -70,10 +67,10 @@ export const productTransfer_create = onCall(async (request) => {
   const shouldWriteJournal = !(destinationType === "owner" && paymentType === "pinjam");
 
   await db.runTransaction(async (tx) => {
-    // Pre-read source items
+    // Pre-read owner warehouse items (source of all outgoing transfers)
     const sourceSnaps = await Promise.all(
       items.map((item) =>
-        tx.get(db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, sourceClubId)).doc(item.productId))
+        tx.get(db.collection(COLLECTIONS.OWNER_INVENTORY_ITEMS(ownerId)).doc(item.productId))
       )
     );
 
@@ -115,7 +112,9 @@ export const productTransfer_create = onCall(async (request) => {
 
       writeJournalEntry(tx, {
         ownerId,
-        clubId: sourceClubId,
+        // Transfer originates from owner warehouse (no source club);
+        // attribute to destination club if internal, otherwise use a placeholder
+        clubId: (destinationClubId ?? sourceClubId ?? "") as string,
         entryType: "stock_transfer",
         amount: total,
         debitAccount,
@@ -142,11 +141,11 @@ export const productTransfer_create = onCall(async (request) => {
       const currentStock = snap.data()!["currentStock"] as number;
       const stockAfter = currentStock - item.quantity;
 
-      const movRef = db.collection(COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, sourceClubId)).doc();
+      const movRef = db.collection(COLLECTIONS.OWNER_INVENTORY_MOVEMENTS(ownerId)).doc();
       tx.set(movRef, {
         id: movRef.id,
         ownerId,
-        clubId: sourceClubId,
+        clubId: null,
         inventoryItemId: item.productId,
         itemName: item.productName,
         movementType: "transfer_out",

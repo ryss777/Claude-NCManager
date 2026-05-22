@@ -8,6 +8,8 @@ import {
   orderBy,
   where,
 } from "firebase/firestore";
+
+interface ClubOption { id: string; name: string; }
 import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
 
@@ -64,15 +66,66 @@ const fmtDate = (iso: string) =>
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function ClubPage() {
-  const { ownerId, clubId } = useOwnerAuthStore();
+  const { ownerId } = useOwnerAuthStore();
   const [tab, setTab] = useState<Tab>("stok");
+
+  // ── Club selector ────────────────────────────────────────────────────────
+  const [clubs, setClubs] = useState<ClubOption[]>([]);
+  const [selectedClubId, setSelectedClubId] = useState<string>("");
+  const [loadingClubs, setLoadingClubs] = useState(true);
+
+  useEffect(() => {
+    if (!ownerId) return;
+    setLoadingClubs(true);
+    getDocs(collection(firebaseDb(), `owners/${ownerId}/clubs`))
+      .then((snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, name: (d.data()["name"] as string) ?? d.id }));
+        setClubs(list);
+        if (list.length > 0 && !selectedClubId) setSelectedClubId(list[0]!.id);
+      })
+      .finally(() => setLoadingClubs(false));
+  }, [ownerId]);
+
+  const selectedClub = clubs.find((c) => c.id === selectedClubId);
 
   return (
     <div className="flex flex-col gap-5 h-full min-h-0">
       {/* Page header */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Manajemen Club</h1>
-        <p className="text-sm text-slate-400 mt-0.5">Stok bahan baku, resep minuman, dan absensi member</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Manajemen Club</h1>
+          <p className="text-sm text-slate-400 mt-0.5">Stok produk club, resep minuman, dan absensi member</p>
+        </div>
+
+        {/* Club selector */}
+        {loadingClubs ? (
+          <div className="text-xs text-slate-400 mt-1.5">Memuat club…</div>
+        ) : clubs.length === 0 ? (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-xs text-amber-700">
+            Belum ada club. Transfer produk ke club terlebih dahulu.
+          </div>
+        ) : clubs.length === 1 ? (
+          <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5">
+            <span className="text-base">🏢</span>
+            <div>
+              <p className="text-xs text-blue-500 font-medium">Club aktif</p>
+              <p className="text-sm font-bold text-blue-800">{selectedClub?.name}</p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-slate-500 font-medium whitespace-nowrap">Club aktif</label>
+            <select
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+              value={selectedClubId}
+              onChange={(e) => setSelectedClubId(e.target.value)}
+            >
+              {clubs.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -101,13 +154,19 @@ export default function ClubPage() {
 
       {/* Tab content */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {ownerId && clubId && (
+        {ownerId && selectedClubId ? (
           <>
-            {tab === "stok"    && <StokTab    ownerId={ownerId} clubId={clubId} />}
-            {tab === "resep"   && <ResepTab   ownerId={ownerId} clubId={clubId} />}
-            {tab === "absensi" && <AbsensiTab ownerId={ownerId} clubId={clubId} />}
+            {tab === "stok"    && <StokTab    ownerId={ownerId} clubId={selectedClubId} />}
+            {tab === "resep"   && <ResepTab   ownerId={ownerId} clubId={selectedClubId} />}
+            {tab === "absensi" && <AbsensiTab ownerId={ownerId} clubId={selectedClubId} />}
           </>
-        )}
+        ) : !loadingClubs && clubs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-400">
+            <span className="text-4xl">🏢</span>
+            <p className="text-sm font-medium">Belum ada club yang terdaftar.</p>
+            <p className="text-xs text-center">Lakukan transfer produk dari laman <strong>Transfer Produk</strong> ke club Anda.</p>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -125,9 +184,14 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // Delete state
+  // Single delete
   const [deleteTarget, setDeleteTarget] = useState<InventoryItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Bulk delete
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   // Form state
   const [ingName, setIngName] = useState("");
@@ -192,16 +256,59 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
     setDeleting(true);
     try {
       await callFunction("inventory_removeItem", {
-        ownerId, clubId, itemId: deleteTarget.id,
+        ownerId, clubId, inventoryItemId: deleteTarget.id, force: true,
       });
       setDeleteTarget(null);
       loadItems();
     } catch (e) {
-      // Surface error inside the confirm dialog
       setError(e instanceof Error ? e.message : "Gagal menghapus item");
     } finally {
       setDeleting(false);
     }
+  }
+
+  async function handleBulkDelete() {
+    setBulkDeleting(true);
+    setError("");
+    try {
+      await Promise.all(
+        [...selectedIds].map((inventoryItemId) =>
+          callFunction("inventory_removeItem", { ownerId, clubId, inventoryItemId, force: true })
+        )
+      );
+      setSelectedIds(new Set());
+      setBulkConfirmOpen(false);
+      loadItems();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Gagal menghapus beberapa item");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  // Checkbox helpers
+  const allDisplayedSelected =
+    displayed.length > 0 && displayed.every((i) => selectedIds.has(i.id));
+  const someDisplayedSelected = displayed.some((i) => selectedIds.has(i.id));
+
+  function toggleAll() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allDisplayedSelected) {
+        displayed.forEach((i) => next.delete(i.id));
+      } else {
+        displayed.forEach((i) => next.add(i.id));
+      }
+      return next;
+    });
+  }
+
+  function toggleOne(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }
 
   return (
@@ -231,7 +338,7 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
           ] as { key: typeof typeFilter; label: string }[]).map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => setTypeFilter(key)}
+              onClick={() => { setTypeFilter(key); setSelectedIds(new Set()); }}
               className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
                 typeFilter === key
                   ? "bg-slate-800 text-white border-slate-800"
@@ -242,7 +349,15 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
             </button>
           ))}
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          {selectedIds.size > 0 && (
+            <button
+              onClick={() => { setError(""); setBulkConfirmOpen(true); }}
+              className="px-4 py-2 bg-red-600 text-white text-sm font-semibold rounded-xl hover:bg-red-700 transition"
+            >
+              🗑 Hapus {selectedIds.size} item
+            </button>
+          )}
           <button
             onClick={() => setShowAddModal(true)}
             className="px-4 py-2 bg-violet-600 text-white text-sm font-semibold rounded-xl hover:bg-violet-700 transition"
@@ -262,6 +377,15 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
               <tr>
+                <th className="pl-4 pr-2 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allDisplayedSelected}
+                    ref={(el) => { if (el) el.indeterminate = someDisplayedSelected && !allDisplayedSelected; }}
+                    onChange={toggleAll}
+                    className="rounded cursor-pointer"
+                  />
+                </th>
                 <th className="px-4 py-3 text-left">Nama</th>
                 <th className="px-4 py-3 text-left">Tipe</th>
                 <th className="px-4 py-3 text-left">Kategori</th>
@@ -275,8 +399,20 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
               {displayed.map((item) => {
                 const isLow = item.currentStock <= item.minimumStock;
                 const isIngredient = item.itemType === "ingredient";
+                const isChecked = selectedIds.has(item.id);
                 return (
-                  <tr key={item.id} className="hover:bg-slate-50 group">
+                  <tr
+                    key={item.id}
+                    className={`hover:bg-slate-50 group ${isChecked ? "bg-red-50/40" : ""}`}
+                  >
+                    <td className="pl-4 pr-2 py-3">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleOne(item.id)}
+                        className="rounded cursor-pointer"
+                      />
+                    </td>
                     <td className="px-4 py-3 font-medium text-slate-800">{item.name}</td>
                     <td className="px-4 py-3">
                       {isIngredient ? (
@@ -314,7 +450,45 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
         </div>
       )}
 
-      {/* Delete confirm dialog */}
+      {/* Bulk delete confirm dialog */}
+      {bulkConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
+            <p className="font-bold text-slate-900 mb-1">Hapus {selectedIds.size} Item?</p>
+            <p className="text-xs text-slate-400 mb-3">Item berikut akan dihapus dari daftar stok:</p>
+            <ul className="mb-4 max-h-48 overflow-y-auto space-y-1">
+              {items.filter((i) => selectedIds.has(i.id)).map((i) => (
+                <li key={i.id} className="flex items-center justify-between text-sm px-3 py-1.5 bg-red-50 rounded-lg">
+                  <span className="font-medium text-slate-800">{i.name}</span>
+                  {i.currentStock > 0 && (
+                    <span className="text-xs text-amber-600 font-semibold ml-2 shrink-0">
+                      stok: {i.currentStock} {i.unit}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setBulkConfirmOpen(false); setError(""); }}
+                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting}
+                className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
+              >
+                {bulkDeleting ? "Menghapus…" : `Ya, Hapus ${selectedIds.size} Item`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Single delete confirm dialog */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">

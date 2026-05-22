@@ -70,6 +70,38 @@ service cloud.firestore {
       allow read: if isOwnerOf(ownerId);
       allow write: if isOwnerOf(ownerId);
 
+      // ── Owner Warehouse Inventory ─────────────────────────────────────────
+      // Products stocked from catalog; distinct from any club's stock.
+
+      match /inventoryItems/{itemId} {
+        allow read: if isOwnerOf(ownerId);
+        // Owner can soft-delete directly; Cloud Functions handle all creates/restocks.
+        allow update: if isOwnerOf(ownerId);
+        allow create: if false; // Cloud Function only
+        allow delete: if false;
+      }
+
+      match /inventoryMovements/{movementId} {
+        allow read: if isOwnerOf(ownerId);
+        allow create: if false; // Cloud Function only
+        allow update: if false; // immutable
+        allow delete: if false;
+      }
+
+      match /replenishments/{replenishmentId} {
+        allow read: if isOwnerOf(ownerId);
+        allow create: if false; // Cloud Function only
+        allow update: if false; // immutable
+        allow delete: if false;
+      }
+
+      // ── Owner-level Idempotency Log ───────────────────────────────────────
+      // Written and read exclusively by Cloud Functions via Admin SDK.
+
+      match /_idempotency/{operationId} {
+        allow read, write: if false;
+      }
+
       // ── Clubs ─────────────────────────────────────────────────────────────
 
       match /clubs/{clubId} {

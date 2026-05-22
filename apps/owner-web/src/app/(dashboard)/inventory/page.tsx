@@ -285,12 +285,12 @@ export default function InventoryPage() {
   }, [selectedItem?.id]);
 
   async function deactivateItem(id: string) {
-    const itemRef = doc(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/inventoryItems/${id}`);
+    const itemRef = doc(firebaseDb(), `owners/${ownerId}/inventoryItems/${id}`);
     await updateDoc(itemRef, { isActive: false, updatedAt: new Date().toISOString() });
   }
 
   async function handleRemove() {
-    if (!removingItem || !ownerId || !clubId) return;
+    if (!removingItem || !ownerId) return;
     setRemoveLoading(true);
     try {
       await deactivateItem(removingItem.id);
@@ -305,7 +305,7 @@ export default function InventoryPage() {
   }
 
   async function handleBulkRemove() {
-    if (selectedItemIds.size === 0 || !ownerId || !clubId) return;
+    if (selectedItemIds.size === 0 || !ownerId) return;
     setBulkRemoving(true);
     try {
       await Promise.all([...selectedItemIds].map((id) => deactivateItem(id)));
@@ -338,7 +338,7 @@ export default function InventoryPage() {
   }
 
   async function handleBulkAdd() {
-    if (selectedCatalogIds.size === 0 || !ownerId || !clubId) return;
+    if (selectedCatalogIds.size === 0 || !ownerId) return;
     setAddLoading(true); setAddFeedback(undefined);
     const ids = [...selectedCatalogIds];
     let ok = 0;
@@ -394,11 +394,11 @@ export default function InventoryPage() {
   }
 
   async function loadItems() {
-    if (!ownerId || !clubId) return;
+    if (!ownerId) return;
     setLoadingList(true);
     try {
       const snap = await getDocs(
-        collection(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/inventoryItems`)
+        collection(firebaseDb(), `owners/${ownerId}/inventoryItems`)
       );
       const all = snap.docs.map((d) => ({ id: d.id, ...d.data() } as InventoryItem));
       setItems(
@@ -417,7 +417,7 @@ export default function InventoryPage() {
     setCatalog(snap.docs.map((d) => ({ id: d.id, ...d.data() } as CatalogProduct)));
   }
 
-  useEffect(() => { loadItems(); loadCatalog(); }, [ownerId, clubId]);
+  useEffect(() => { loadItems(); loadCatalog(); }, [ownerId]);
 
   const addedIds = useMemo(
     () => new Set(
@@ -464,11 +464,11 @@ export default function InventoryPage() {
   const restockTotal = restockItems.reduce((s, r) => s + r.subtotal, 0);
 
   async function loadReplenishments() {
-    if (!ownerId || !clubId) return;
+    if (!ownerId) return;
     setLoadingReplenishments(true);
     const snap = await getDocs(
       query(
-        collection(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/replenishments`),
+        collection(firebaseDb(), `owners/${ownerId}/replenishments`),
         orderBy("createdAt", "desc"),
         limit(30)
       )
@@ -514,11 +514,11 @@ export default function InventoryPage() {
   const [movementTypeFilter, setMovementTypeFilter] = useState("all");
 
   async function loadMovements() {
-    if (!ownerId || !clubId) return;
+    if (!ownerId) return;
     setLoadingMovements(true);
     const snap = await getDocs(
       query(
-        collection(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/inventoryMovements`),
+        collection(firebaseDb(), `owners/${ownerId}/inventoryMovements`),
         orderBy("createdAt", "desc"),
         limit(100)
       )

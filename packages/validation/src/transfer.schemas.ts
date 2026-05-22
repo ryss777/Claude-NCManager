@@ -12,7 +12,8 @@ const transferItemSchema = z.object({
 
 export const createProductTransferSchema = z.object({
   ownerId: z.string().min(1),
-  sourceClubId: z.string().min(1),
+  // sourceClubId is kept for backward-compat but transfers always originate from owner warehouse
+  sourceClubId: z.string().nullish(),
 }).merge(idempotencySchema).extend({
   destinationType: z.enum(["club", "owner"]),
   destinationOwnerId: z.string().min(1).nullish(),

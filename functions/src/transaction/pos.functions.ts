@@ -185,8 +185,12 @@ export const pos_completeTransaction = onCall(async (request) => {
   const ingredientDeductions = buildIngredientDeductions(txItems, recipeMap);
 
   await db.runTransaction(async (tx) => {
-    // Pre-read inventory items before any writes
-    const invSnaps = await readInventorySnaps(tx, ownerId, clubId, txItems);
+    // Pre-read inventory items before any writes (club stock for operator POS)
+    const invSnaps = await readInventorySnaps(
+      tx,
+      COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId),
+      txItems
+    );
     const ingSnaps = ingredientDeductions.length > 0
       ? await readIngredientSnaps(tx, ownerId, clubId, ingredientDeductions)
       : [];
@@ -258,8 +262,9 @@ export const pos_completeTransaction = onCall(async (request) => {
       }
     }
 
-    // 5. Deduct inventory stock for each sold item
+    // 5. Deduct inventory stock for each sold item (club stock)
     writeInventoryMovements(tx, {
+      movementsPath: COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, clubId),
       ownerId,
       clubId,
       items: txItems,
@@ -337,8 +342,12 @@ export const pos_reverseTransaction = onCall(async (request) => {
   const ingredientDeductions = buildIngredientDeductions(txItems, recipeMap);
 
   await db.runTransaction(async (tx) => {
-    // Pre-read inventory items before any writes
-    const invSnaps = await readInventorySnaps(tx, ownerId, clubId, txItems);
+    // Pre-read inventory items before any writes (club stock for reversal)
+    const invSnaps = await readInventorySnaps(
+      tx,
+      COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId),
+      txItems
+    );
     const ingSnaps = ingredientDeductions.length > 0
       ? await readIngredientSnaps(tx, ownerId, clubId, ingredientDeductions)
       : [];
@@ -389,8 +398,9 @@ export const pos_reverseTransaction = onCall(async (request) => {
       }
     }
 
-    // 5. Restore inventory stock (return items to shelf)
+    // 5. Restore inventory stock (return items to shelf — club stock)
     writeInventoryMovements(tx, {
+      movementsPath: COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, clubId),
       ownerId,
       clubId,
       items: txItems,

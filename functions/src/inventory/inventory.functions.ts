@@ -18,15 +18,14 @@ export const inventory_createItem = onCall(async (request) => {
   requireRole(request, "owner");
 
   const payload = validatePayload(createInventoryItemSchema, request.data);
-  const { ownerId, clubId } = payload;
+  const { ownerId } = payload;
 
-  const itemRef = db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc();
+  const itemRef = db.collection(COLLECTIONS.OWNER_INVENTORY_ITEMS(ownerId)).doc();
   const now = new Date().toISOString();
 
   await itemRef.set({
     id: itemRef.id,
     ownerId,
-    clubId,
     name: payload.name,
     unit: payload.unit,
     category: payload.category ?? null,
@@ -77,7 +76,7 @@ export const inventory_addFromCatalog = onCall(async (request) => {
   requireRole(request, "owner");
 
   const payload = validatePayload(addFromCatalogSchema, request.data);
-  const { ownerId, clubId, productCatalogId, unit, minimumStock } = payload;
+  const { ownerId, productCatalogId, unit, minimumStock } = payload;
 
   const catalogSnap = await db.collection(COLLECTIONS.PRODUCT_CATALOG).doc(productCatalogId).get();
   if (!catalogSnap.exists) throw new HttpsError("not-found", "Produk tidak ditemukan di katalog");
@@ -85,7 +84,7 @@ export const inventory_addFromCatalog = onCall(async (request) => {
   if (!catalog["isActive"]) throw new HttpsError("failed-precondition", "Produk tidak aktif");
 
   const existingSnap = await db
-    .collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId))
+    .collection(COLLECTIONS.OWNER_INVENTORY_ITEMS(ownerId))
     .where("productCatalogId", "==", productCatalogId)
     .limit(1)
     .get();
@@ -102,12 +101,11 @@ export const inventory_addFromCatalog = onCall(async (request) => {
     return { inventoryItemId: existingDoc.id };
   }
 
-  const itemRef = db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc();
+  const itemRef = db.collection(COLLECTIONS.OWNER_INVENTORY_ITEMS(ownerId)).doc();
 
   await itemRef.set({
     id: itemRef.id,
     ownerId,
-    clubId,
     productCatalogId,
     name: catalog["name"] as string,
     category: catalog["category"] as string,
@@ -220,13 +218,13 @@ export const inventory_adjustStock = onCall(async (request) => {
   requireRole(request, "owner");
 
   const payload = validatePayload(adjustInventoryStockSchema, request.data);
-  const { ownerId, clubId, operationId, inventoryItemId, quantity, unitCost } = payload;
+  const { ownerId, operationId, inventoryItemId, quantity, unitCost } = payload;
 
-  const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
+  const idempotencyPath = `owners/${ownerId}/_idempotency`;
   const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
   throwIfDuplicate(isDuplicate, operationId);
 
-  const itemRef = db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc(inventoryItemId);
+  const itemRef = db.collection(COLLECTIONS.OWNER_INVENTORY_ITEMS(ownerId)).doc(inventoryItemId);
   const itemSnap = await itemRef.get();
 
   if (!itemSnap.exists) {
@@ -240,13 +238,13 @@ export const inventory_adjustStock = onCall(async (request) => {
   const adjustmentDelta = stockAfter - currentStock;
 
   const now = new Date().toISOString();
-  const movementRef = db.collection(COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, clubId)).doc();
+  const movementRef = db.collection(COLLECTIONS.OWNER_INVENTORY_MOVEMENTS(ownerId)).doc();
 
   await db.runTransaction(async (tx) => {
     tx.create(movementRef, {
       id: movementRef.id,
       ownerId,
-      clubId,
+      clubId: null,
       inventoryItemId,
       itemName: item["name"] as string,
       movementType: "adjustment",

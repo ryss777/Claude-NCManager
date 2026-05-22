@@ -21,19 +21,20 @@ export const replenishment_complete = onCall(async (request) => {
   const payload = validatePayload(createReplenishmentSchema, request.data);
   const { ownerId, clubId, operationId, items, priceTier, notes } = payload;
 
-  const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
+  const idempotencyPath = `owners/${ownerId}/_idempotency`;
   const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
   throwIfDuplicate(isDuplicate, operationId);
 
   const total = items.reduce((sum, item) => sum + item.subtotal, 0);
   const now = new Date().toISOString();
-  const replenishmentRef = db.collection(COLLECTIONS.REPLENISHMENTS(ownerId, clubId)).doc();
+  // Replenishment records live at the owner level (gudang owner), not per-club
+  const replenishmentRef = db.collection(COLLECTIONS.OWNER_REPLENISHMENTS(ownerId)).doc();
 
   await db.runTransaction(async (tx) => {
-    // Pre-read inventory items before any writes
+    // Pre-read owner warehouse items before any writes
     const invSnaps = await Promise.all(
       items.map((item) =>
-        tx.get(db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc(item.productId))
+        tx.get(db.collection(COLLECTIONS.OWNER_INVENTORY_ITEMS(ownerId)).doc(item.productId))
       )
     );
 
@@ -79,11 +80,11 @@ export const replenishment_complete = onCall(async (request) => {
       const currentStock = snap.data()!["currentStock"] as number;
       const stockAfter = currentStock + item.quantity;
 
-      const movementRef = db.collection(COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, clubId)).doc();
+      const movementRef = db.collection(COLLECTIONS.OWNER_INVENTORY_MOVEMENTS(ownerId)).doc();
       tx.set(movementRef, {
         id: movementRef.id,
         ownerId,
-        clubId,
+        clubId: null,
         inventoryItemId: item.productId,
         itemName: item.productName,
         movementType: "restock",

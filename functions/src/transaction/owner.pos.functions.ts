@@ -52,7 +52,12 @@ export const pos_ownerSale = onCall(async (request) => {
   const ingredientDeductions = buildIngredientDeductions(payload.items, recipeMap);
 
   await db.runTransaction(async (tx) => {
-    const invSnaps = await readInventorySnaps(tx, ownerId, clubId, payload.items);
+    // Owner POS deducts from the owner's warehouse, not the club's stock
+    const invSnaps = await readInventorySnaps(
+      tx,
+      COLLECTIONS.OWNER_INVENTORY_ITEMS(ownerId),
+      payload.items
+    );
     const ingSnaps = ingredientDeductions.length > 0
       ? await readIngredientSnaps(tx, ownerId, clubId, ingredientDeductions)
       : [];
@@ -136,6 +141,7 @@ export const pos_ownerSale = onCall(async (request) => {
     }
 
     writeInventoryMovements(tx, {
+      movementsPath: COLLECTIONS.OWNER_INVENTORY_MOVEMENTS(ownerId),
       ownerId, clubId,
       items: payload.items,
       invSnaps,

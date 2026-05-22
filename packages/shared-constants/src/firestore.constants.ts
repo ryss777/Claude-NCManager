@@ -20,6 +20,14 @@ export const COLLECTIONS = {
     `owners/${ownerId}/clubs/${clubId}/transactions`,
   SHIFTS: (ownerId: string, clubId: string) =>
     `owners/${ownerId}/clubs/${clubId}/shifts`,
+  // Owner-level warehouse paths (not tied to any specific club)
+  OWNER_INVENTORY_ITEMS: (ownerId: string) =>
+    `owners/${ownerId}/inventoryItems`,
+  OWNER_INVENTORY_MOVEMENTS: (ownerId: string) =>
+    `owners/${ownerId}/inventoryMovements`,
+  OWNER_REPLENISHMENTS: (ownerId: string) =>
+    `owners/${ownerId}/replenishments`,
+  // Club-level inventory paths (products transferred to a specific club)
   INVENTORY_ITEMS: (ownerId: string, clubId: string) =>
     `owners/${ownerId}/clubs/${clubId}/inventoryItems`,
   INVENTORY_MOVEMENTS: (ownerId: string, clubId: string) =>
