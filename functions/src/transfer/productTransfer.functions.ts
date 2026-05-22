@@ -86,7 +86,7 @@ export const productTransfer_create = onCall(async (request) => {
     tx.set(transferRef, {
       id: transferRef.id,
       ownerId,
-      sourceClubId,
+      sourceClubId: sourceClubId ?? null,
       destinationType,
       destinationOwnerId: destinationType === "owner" ? destinationOwnerId : ownerId,
       destinationClubId: destinationType === "club" ? destinationClubId : null,
@@ -213,7 +213,7 @@ export const productTransfer_create = onCall(async (request) => {
         status: "pending",
         transferId: transferRef.id,
         sourceOwnerId: ownerId,
-        sourceClubId,
+        sourceClubId: sourceClubId ?? null,
         paymentType,
         priceTier,
         items,

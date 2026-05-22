@@ -6,7 +6,10 @@
  *
  * Data yang dibuat:
  *   - 18 produk di koleksi global `productCatalog`
- *   - 18 inventoryItems di club-demo-001 (stok awal 0)
+ *   - 18 inventoryItems di gudang owner (owners/owner-demo-001/inventoryItems, stok awal 0)
+ *
+ * Stok club (owners/.../clubs/.../inventoryItems) hanya terisi lewat
+ * fitur Transfer Produk dari gudang owner ke club.
  */
 
 import { initializeApp } from "firebase-admin/app";
@@ -16,7 +19,6 @@ process.env.FIRESTORE_EMULATOR_HOST = "localhost:8080";
 
 const PROJECT_ID = "demo-ncmanager";
 const OWNER_ID   = "owner-demo-001";
-const CLUB_ID    = "club-demo-001";
 
 initializeApp({ projectId: PROJECT_ID });
 const db = getFirestore();
@@ -54,7 +56,8 @@ async function seed() {
   console.log(`\n🌱 Seeding ${products.length} produk ke emulator...\n`);
 
   const now = new Date().toISOString();
-  const invBase = `owners/${OWNER_ID}/clubs/${CLUB_ID}/inventoryItems`;
+  // Owner warehouse — terpisah dari stok club
+  const invBase = `owners/${OWNER_ID}/inventoryItems`;
 
   // Cek apakah katalog sudah ada
   const existingSnap = await db.collection("productCatalog").limit(1).get();
@@ -77,12 +80,11 @@ async function seed() {
       updatedAt: now,
     });
 
-    // 2. Tulis ke inventaris club
+    // 2. Tulis ke gudang owner (bukan club)
     const invRef = db.collection(invBase).doc();
     await invRef.set({
       id: invRef.id,
       ownerId: OWNER_ID,
-      clubId: CLUB_ID,
       productCatalogId: catalogRef.id,
       name: p.name,
       category: p.category,

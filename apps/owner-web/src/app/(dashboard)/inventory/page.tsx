@@ -342,6 +342,7 @@ export default function InventoryPage() {
     setAddLoading(true); setAddFeedback(undefined);
     const ids = [...selectedCatalogIds];
     let ok = 0;
+    let skipped = 0;
     const errors: string[] = [];
     try {
       for (const productCatalogId of ids) {
@@ -353,15 +354,23 @@ export default function InventoryPage() {
           });
           ok++;
         } catch (err) {
-          const name = catalog.find((p) => p.id === productCatalogId)?.name ?? productCatalogId;
-          const reason = err instanceof Error ? err.message : String(err);
-          errors.push(`${name} (${reason})`);
+          const msg = err instanceof Error ? err.message : String(err);
+          // 409 = already-exists → skip silently, item already in inventory
+          if (msg.includes("already-exists") || msg.includes("sudah ada")) {
+            skipped++;
+          } else {
+            const name = catalog.find((p) => p.id === productCatalogId)?.name ?? productCatalogId;
+            errors.push(`${name} (${msg})`);
+          }
         }
       }
+      const parts: string[] = [];
+      if (ok > 0) parts.push(`${ok} produk ditambahkan`);
+      if (skipped > 0) parts.push(`${skipped} sudah ada (dilewati)`);
       setAddFeedback(
         errors.length === 0
-          ? { type: "ok", msg: `${ok} produk berhasil ditambahkan` }
-          : { type: "err", msg: `${ok} berhasil. Gagal: ${errors.join("; ")}` }
+          ? { type: "ok", msg: parts.join(", ") || "Selesai" }
+          : { type: "err", msg: `${parts.join(", ")}. Gagal: ${errors.join("; ")}` }
       );
       setSelectedCatalogIds(new Set());
       await loadItems();
@@ -407,6 +416,8 @@ export default function InventoryPage() {
           .sort((a, b) => a.name.localeCompare(b.name, "id"))
       );
       setSelectedItemIds(new Set());
+    } catch (err) {
+      console.error("[inventory] loadItems failed:", err);
     } finally {
       setLoadingList(false);
     }
