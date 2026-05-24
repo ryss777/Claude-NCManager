@@ -1,4 +1,5 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import type { DocumentReference, DocumentData } from "firebase-admin/firestore";
 import { db, FieldValue } from "../utils/admin";
 import { validatePayload, requireRole } from "../utils/validate";
 import { checkIdempotency, throwIfDuplicate, markOperationComplete } from "../utils/idempotency";
@@ -126,7 +127,7 @@ export const competition_addParticipant = onCall(async (request) => {
   if (!compSnap.exists) throw new HttpsError("not-found", "Lomba tidak ditemukan");
 
   let displayName = guestName?.trim() ?? "";
-  let customerRef: FirebaseFirestore.DocumentReference | null = null;
+  let customerRef: DocumentReference<DocumentData> | null = null;
 
   if (type === "customer" && customerId) {
     customerRef = db.collection(COLLECTIONS.CUSTOMERS(ownerId, clubId)).doc(customerId);
