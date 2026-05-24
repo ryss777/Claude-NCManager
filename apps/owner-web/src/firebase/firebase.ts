@@ -9,7 +9,13 @@ import {
   type User,
 } from "firebase/auth";
 import { getFunctions, httpsCallable, connectFunctionsEmulator } from "firebase/functions";
-import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import {
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  connectFirestoreEmulator,
+} from "firebase/firestore";
 export type { Firestore } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -28,7 +34,20 @@ export function initFirebase() {
 
   const app = initializeApp(firebaseConfig);
 
-  if (process.env.NODE_ENV === "development" && !emulatorsConnected) {
+  const isDev    = process.env.NODE_ENV === "development";
+  const isClient = typeof window !== "undefined";
+
+  // Aktifkan persistence hanya di client-side production.
+  // Di development dinonaktifkan agar tidak ada stale cache dari sesi emulator sebelumnya.
+  if (isClient && !isDev) {
+    initializeFirestore(app, {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+    });
+  }
+
+  if (isDev && !emulatorsConnected) {
     emulatorsConnected = true;
     connectAuthEmulator(getAuth(app), "http://localhost:9099", { disableWarnings: true });
     connectFunctionsEmulator(getFunctions(app), "localhost", 5001);
