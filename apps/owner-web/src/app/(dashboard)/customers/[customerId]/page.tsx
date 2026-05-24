@@ -108,6 +108,28 @@ interface Debt {
 
 type Tab = "membership" | "transactions" | "visits" | "debts";
 
+type PlanTier = "basic" | "silver" | "gold" | "platinum";
+
+interface Plan {
+  id: string;
+  planType?: "regular" | "locker";
+  name: string;
+  tier: PlanTier;
+  price: number;
+  visitQuota: number;
+  hasExpiry: boolean;
+  durationDays: number | null;
+  isActive: boolean;
+  blendingFeePerSession?: number;
+}
+
+const PLAN_TIER_BADGE: Record<PlanTier, string> = {
+  basic:    "bg-slate-100 text-slate-700",
+  silver:   "bg-slate-200 text-slate-800",
+  gold:     "bg-yellow-100 text-yellow-800",
+  platinum: "bg-blue-100 text-blue-800",
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const fmt = (n: number) =>
@@ -183,6 +205,16 @@ export default function CustomerDetailPage() {
   const [topUpSessions, setTopUpSessions] = useState("10");
   const [topUpLoading, setTopUpLoading]   = useState(false);
   const [topUpFeedback, setTopUpFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
+
+  // Activate membership dialog
+  const [activateOpen, setActivateOpen]               = useState(false);
+  const [activatePlans, setActivatePlans]             = useState<Plan[]>([]);
+  const [activatePlansLoading, setActivatePlansLoading] = useState(false);
+  const [activateSelectedPlan, setActivateSelectedPlan] = useState<Plan | null>(null);
+  const [activateAmountPaid, setActivateAmountPaid]   = useState("");
+  const [activatePayMethod, setActivatePayMethod]     = useState<"cash" | "transfer">("cash");
+  const [activateSaving, setActivateSaving]           = useState(false);
+  const [activateFeedback, setActivateFeedback]       = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
   const activeMembership = useMemo(
     () => memberships.find((m) => m.status === "active") ?? null,
@@ -343,6 +375,60 @@ export default function CustomerDetailPage() {
     } catch (err) {
       setTopUpFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal top up" });
     } finally { setTopUpLoading(false); }
+  }
+
+  async function loadPlans() {
+    if (!ownerId || !clubId) return;
+    setActivatePlansLoading(true);
+    try {
+      const snap = await getDocs(
+        query(
+          collection(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/membershipPlans`),
+          where("isActive", "==", true)
+        )
+      );
+      setActivatePlans(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Plan, "id">) })));
+    } finally {
+      setActivatePlansLoading(false);
+    }
+  }
+
+  async function handleActivateMembership() {
+    if (!activateSelectedPlan || !ownerId || !clubId) return;
+    setActivateSaving(true);
+    setActivateFeedback(undefined);
+    try {
+      const amountPaid = activateAmountPaid !== "" ? parseFloat(activateAmountPaid) : undefined;
+      await callFunction("membership_activate", {
+        ownerId, clubId,
+        requestId: uuidv4(), operationId: uuidv4(),
+        customerId,
+        planId: activateSelectedPlan.id,
+        transactionId: uuidv4(),
+        ...(amountPaid !== undefined ? { amountPaid } : {}),
+        paymentMethod: activatePayMethod,
+      });
+      const price = activateSelectedPlan.planType === "locker"
+        ? 0
+        : activateSelectedPlan.price ?? 0;
+      const paid = amountPaid ?? price;
+      const debt = Math.max(0, price - paid);
+      setActivateFeedback({
+        type: "ok",
+        msg: `✓ ${activateSelectedPlan.name} diaktifkan${debt > 0 ? ` · Utang: ${fmt(debt)}` : ""}`,
+      });
+      setTimeout(() => {
+        setActivateOpen(false);
+        setActivateSelectedPlan(null);
+        setActivateAmountPaid("");
+        setActivateFeedback(undefined);
+        loadAll();
+      }, 1200);
+    } catch (err) {
+      setActivateFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal mengaktifkan" });
+    } finally {
+      setActivateSaving(false);
+    }
   }
 
   // ── Loading / not found states ────────────────────────────────────────────
@@ -524,6 +610,153 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
+      {/* ── Activate Membership Dialog ───────────────────────────────────────── */}
+      {activateOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Aktifkan Membership</h3>
+                <p className="text-xs text-slate-400 mt-0.5">{customer.displayName}</p>
+              </div>
+              <button
+                onClick={() => { setActivateOpen(false); setActivateSelectedPlan(null); setActivateFeedback(undefined); setActivateAmountPaid(""); }}
+                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
+              >×</button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 min-h-0 p-6 space-y-4">
+              {activateFeedback && (
+                <div className={`text-sm rounded-xl px-4 py-3 ${activateFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                  {activateFeedback.msg}
+                </div>
+              )}
+
+              {/* Plan list */}
+              <div>
+                <p className="text-xs text-slate-500 font-medium mb-2">Pilih Paket</p>
+                {activatePlansLoading ? (
+                  <div className="flex justify-center py-8">
+                    <div className="w-6 h-6 border-2 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
+                  </div>
+                ) : activatePlans.length === 0 ? (
+                  <div className="text-center py-8 bg-slate-50 rounded-xl">
+                    <p className="text-sm text-slate-400">Belum ada paket membership aktif.</p>
+                    <p className="text-xs text-slate-400 mt-1">Buat paket di tab Membership di halaman Pelanggan.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {activatePlans.map((plan) => {
+                      const isLocker = plan.planType === "locker";
+                      const selected = activateSelectedPlan?.id === plan.id;
+                      return (
+                        <button
+                          key={plan.id}
+                          onClick={() => {
+                            setActivateSelectedPlan(plan);
+                            setActivateAmountPaid(isLocker ? "0" : (plan.price?.toString() ?? ""));
+                            setActivateFeedback(undefined);
+                          }}
+                          className={`w-full text-left p-4 rounded-xl border-2 transition ${
+                            selected
+                              ? isLocker ? "border-purple-400 bg-purple-50" : "border-blue-400 bg-blue-50"
+                              : "border-slate-200 hover:border-slate-300"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {isLocker ? (
+                                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">🔑 LOKER</span>
+                              ) : (
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_TIER_BADGE[plan.tier] ?? "bg-slate-100 text-slate-700"}`}>
+                                  {plan.tier?.toUpperCase()}
+                                </span>
+                              )}
+                              <span className="font-semibold text-slate-800 text-sm">{plan.name}</span>
+                            </div>
+                            <div className="text-right shrink-0">
+                              {isLocker ? (
+                                <p className="font-bold text-purple-700 text-sm">{fmt(plan.blendingFeePerSession ?? 0)}<span className="text-xs font-normal text-slate-400">/sesi</span></p>
+                              ) : (
+                                <p className="font-bold text-slate-800 text-sm">{fmt(plan.price)}</p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex gap-3 mt-1.5 text-xs text-slate-400">
+                            <span>🎫 {isLocker ? (plan.visitQuota > 0 ? `${plan.visitQuota} kredit awal` : "Harian") : `${plan.visitQuota} kunjungan`}</span>
+                            {plan.hasExpiry && plan.durationDays && <span>⏱ {plan.durationDays} hari</span>}
+                            {!plan.hasExpiry && <span className="text-green-600">⏱ Tidak expired</span>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Payment fields — shown only when a plan is selected */}
+              {activateSelectedPlan && activateSelectedPlan.planType !== "locker" && (
+                <div className="border-t border-slate-100 pt-4 space-y-3">
+                  <p className="text-xs text-slate-500 font-medium">Pembayaran</p>
+                  <label className="block">
+                    <span className="text-xs text-slate-500">Jumlah Bayar (Rp)</span>
+                    <div className="relative mt-1">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">Rp</span>
+                      <input
+                        type="number"
+                        min={0}
+                        className="w-full border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        value={activateAmountPaid}
+                        onChange={(e) => setActivateAmountPaid(e.target.value)}
+                      />
+                    </div>
+                    {activateAmountPaid !== "" && parseFloat(activateAmountPaid) < (activateSelectedPlan.price ?? 0) && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        ⚠ Kurang {fmt((activateSelectedPlan.price ?? 0) - parseFloat(activateAmountPaid))} — sisa akan dicatat sebagai utang
+                      </p>
+                    )}
+                  </label>
+                  <div>
+                    <span className="text-xs text-slate-500 block mb-1.5">Metode Bayar</span>
+                    <div className="flex gap-2">
+                      {(["cash", "transfer"] as const).map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => setActivatePayMethod(m)}
+                          className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 transition ${
+                            activatePayMethod === m
+                              ? "border-blue-500 bg-blue-50 text-blue-700"
+                              : "border-slate-200 text-slate-500 hover:border-slate-300"
+                          }`}
+                        >
+                          {m === "cash" ? "💵 Tunai" : "🏦 Transfer"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 px-6 pb-6 shrink-0 border-t border-slate-100 pt-4">
+              <button
+                onClick={() => { setActivateOpen(false); setActivateSelectedPlan(null); setActivateFeedback(undefined); setActivateAmountPaid(""); }}
+                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 transition"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleActivateMembership}
+                disabled={activateSaving || !activateSelectedPlan}
+                className="flex-1 bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition"
+              >
+                {activateSaving ? "Mengaktifkan…" : "Aktifkan Membership"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Breadcrumb ───────────────────────────────────────────────────────── */}
       <Link href="/customers" className="text-sm text-slate-500 hover:text-blue-600 mb-5 inline-flex items-center gap-1 transition">
         ← Daftar Pelanggan
@@ -688,6 +921,31 @@ export default function CustomerDetailPage() {
       {/* ── Membership tab ───────────────────────────────────────────────────── */}
       {tab === "membership" && (
         <div className="space-y-4">
+
+          {/* ── No active membership — activate CTA ── */}
+          {!activeMembership && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl shrink-0">🎫</span>
+                <div>
+                  <p className="font-semibold text-amber-900 text-sm">Belum ada membership aktif</p>
+                  <p className="text-xs text-amber-700 mt-0.5">Aktifkan paket untuk mulai mencatat kunjungan pelanggan ini.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setActivateOpen(true);
+                  setActivateSelectedPlan(null);
+                  setActivateFeedback(undefined);
+                  setActivateAmountPaid("");
+                  loadPlans();
+                }}
+                className="shrink-0 bg-amber-500 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-amber-600 transition shadow-sm"
+              >
+                + Aktifkan
+              </button>
+            </div>
+          )}
 
           {/* Locker top-up card */}
           {isLocker && activeMembership && (
