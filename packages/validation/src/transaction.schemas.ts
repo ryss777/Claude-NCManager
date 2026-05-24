@@ -73,6 +73,27 @@ export const ownerSaleSchema = tenantRefSchema
     { message: "customerId wajib diisi ketika amountPaid kurang dari total" }
   );
 
+// ── Exchange / Return ─────────────────────────────────────────────────────────
+
+export const exchangeItemSchema = z.object({
+  productId: z.string().min(1),
+  productName: z.string().min(1),
+  quantity: z.number().int().min(1),
+  unitPrice: z.number().min(0),
+  subtotal: z.number().min(0),
+});
+
+export const exchangeItemsSchema = tenantRefSchema
+  .merge(idempotencySchema)
+  .extend({
+    transactionId: z.string().min(1),
+    returnItems: z.array(exchangeItemSchema).min(1).max(50),
+    newItems: z.array(exchangeItemSchema).max(50).nullish(),
+    notes: z.string().max(500).nullish(),
+  });
+
+export type ExchangeItemsInput = z.infer<typeof exchangeItemsSchema>;
+
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type ReverseTransactionInput = z.infer<typeof reverseTransactionSchema>;
 export type OwnerSaleInput = z.infer<typeof ownerSaleSchema>;

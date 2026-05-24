@@ -38,6 +38,10 @@ export async function readInventorySnaps(
 /**
  * Queries recipes linked to each sold product (outside a Firestore transaction).
  * Returns a map: productId → ingredient list.
+ *
+ * Two lookup strategies:
+ *  1. Primary  — `recipes.where("linkedProductId", "==", productId)` (legacy linked-product flow)
+ *  2. Fallback — `recipes.doc(productId)` directly (new direct-recipe flow where cart productId = recipe.id)
  */
 export async function loadRecipesForItems(
   ownerId: string,
@@ -45,6 +49,8 @@ export async function loadRecipesForItems(
   items: SaleItemRef[]
 ): Promise<Map<string, RecipeIngredient[]>> {
   const uniqueIds = [...new Set(items.map((i) => i.productId))];
+
+  // ── Pass 1: look up by linkedProductId ──────────────────────────────────────
   const snaps = await Promise.all(
     uniqueIds.map((productId) =>
       db
@@ -57,11 +63,31 @@ export async function loadRecipesForItems(
   );
 
   const recipeMap = new Map<string, RecipeIngredient[]>();
+  const missingIds: string[] = [];
+
   snaps.forEach((snap, idx) => {
     if (!snap.empty) {
       recipeMap.set(uniqueIds[idx]!, snap.docs[0]!.data()["ingredients"] as RecipeIngredient[]);
+    } else {
+      missingIds.push(uniqueIds[idx]!);
     }
   });
+
+  // ── Pass 2: fallback — productId might be the recipe's own doc ID ────────────
+  if (missingIds.length > 0) {
+    await Promise.all(
+      missingIds.map(async (productId) => {
+        const snap = await db
+          .collection(COLLECTIONS.RECIPES(ownerId, clubId))
+          .doc(productId)
+          .get();
+        if (snap.exists && snap.data()!["isActive"] === true) {
+          recipeMap.set(productId, snap.data()!["ingredients"] as RecipeIngredient[]);
+        }
+      })
+    );
+  }
+
   return recipeMap;
 }
 
@@ -78,7 +104,11 @@ export function buildIngredientDeductions(
     const ings = recipeMap.get(item.productId);
     if (!ings) continue;
     for (const ing of ings) {
-      const qty = ing.quantity * item.quantity;
+      if (!ing.inventoryItemId) continue; // free-text ingredient — no stock deduction
+      // Convert to base units: scoops × g/scoop = grams to deduct.
+      // If unitAmount is null (old-style or package unit), deduct raw quantity.
+      const rawQty = ing.quantity * item.quantity;
+      const qty = ing.unitAmount != null ? rawQty * ing.unitAmount : rawQty;
       const existing = map.get(ing.inventoryItemId);
       if (existing) {
         existing.quantity += qty;

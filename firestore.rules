@@ -215,7 +215,14 @@ service cloud.firestore {
           allow delete: if false;
         }
 
+        // ── Recipes ─────────────────────────────────────────────────────────
+        match /recipes/{recipeId} {
+          allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+          allow write: if false; // Cloud Function only
+        }
+
         // ── Debts ───────────────────────────────────────────────────────────
+
 
         match /debts/{debtId} {
           allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);

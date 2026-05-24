@@ -327,6 +327,12 @@ export const pos_reverseTransaction = onCall(async (request) => {
   if (status !== "completed") {
     throw new HttpsError("failed-precondition", `Can only reverse completed transactions — status: ${status}`);
   }
+  if (txData["hasExchange"] === true) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Transaksi ini sudah memiliki penukaran produk. Batal penukaran terlebih dahulu jika ingin membatalkan transaksi."
+    );
+  }
 
   const paymentMethod = txData["paymentMethod"] as PaymentMethod;
   const total = txData["total"] as number;

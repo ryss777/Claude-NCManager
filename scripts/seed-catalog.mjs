@@ -5,11 +5,11 @@
  *   node scripts/seed-catalog.mjs
  *
  * Data yang dibuat:
- *   - 18 produk di koleksi global `productCatalog`
- *   - 18 inventoryItems di gudang owner (owners/owner-demo-001/inventoryItems, stok awal 0)
+ *   - 18 produk di koleksi global `productCatalog` SAJA
  *
- * Stok club (owners/.../clubs/.../inventoryItems) hanya terisi lewat
- * fitur Transfer Produk dari gudang owner ke club.
+ * Untuk menambahkan produk ke gudang owner, gunakan fitur
+ * "Tambah dari Katalog" di halaman Produk & Stok.
+ * Stok club hanya terisi lewat Transfer Produk dari gudang owner.
  */
 
 import { initializeApp } from "firebase-admin/app";
@@ -18,7 +18,6 @@ import { getFirestore } from "firebase-admin/firestore";
 process.env.FIRESTORE_EMULATOR_HOST = "localhost:8080";
 
 const PROJECT_ID = "demo-ncmanager";
-const OWNER_ID   = "owner-demo-001";
 
 initializeApp({ projectId: PROJECT_ID });
 const db = getFirestore();
@@ -53,11 +52,9 @@ const products = [
 // ── Seed ──────────────────────────────────────────────────────────────────────
 
 async function seed() {
-  console.log(`\n🌱 Seeding ${products.length} produk ke emulator...\n`);
+  console.log(`\n🌱 Seeding ${products.length} produk ke katalog global...\n`);
 
   const now = new Date().toISOString();
-  // Owner warehouse — terpisah dari stok club
-  const invBase = `owners/${OWNER_ID}/inventoryItems`;
 
   // Cek apakah katalog sudah ada
   const existingSnap = await db.collection("productCatalog").limit(1).get();
@@ -68,7 +65,6 @@ async function seed() {
 
   let created = 0;
   for (const p of products) {
-    // 1. Tulis ke katalog global
     const catalogRef = db.collection("productCatalog").doc();
     await catalogRef.set({
       id: catalogRef.id,
@@ -79,29 +75,12 @@ async function seed() {
       createdAt: now,
       updatedAt: now,
     });
-
-    // 2. Tulis ke gudang owner (bukan club)
-    const invRef = db.collection(invBase).doc();
-    await invRef.set({
-      id: invRef.id,
-      ownerId: OWNER_ID,
-      productCatalogId: catalogRef.id,
-      name: p.name,
-      category: p.category,
-      prices: p.prices,
-      unit: p.category === "Accessories" ? "pcs" : "kaleng",
-      currentStock: 0,
-      minimumStock: 0,
-      isActive: true,
-      createdAt: now,
-      updatedAt: now,
-    });
-
     console.log(`  ✓ ${p.name}`);
     created++;
   }
 
-  console.log(`\n✅ Selesai! ${created} produk berhasil ditambahkan.`);
+  console.log(`\n✅ Selesai! ${created} produk ditambahkan ke katalog global.`);
+  console.log("   Selanjutnya: buka Produk & Stok → Tambah dari Katalog");
   console.log("   Cek di: http://localhost:4000/firestore\n");
 }
 

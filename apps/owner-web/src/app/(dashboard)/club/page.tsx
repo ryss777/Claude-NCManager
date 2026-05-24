@@ -26,13 +26,33 @@ interface InventoryItem {
   currentStock: number;
   minimumStock: number;
   isActive: boolean;
+  // Serving data — present when product was transferred from a catalog item with takaran
+  baseUnit?: string | null;
+  takaran?: TakaranOption[] | null;
+}
+
+interface TakaranOption {
+  name: string;   // "scoop", "sajian", …
+  amount: number; // in baseUnit (g or ml)
+}
+
+/** Returns e.g. "≈88 scoop · 44 sajian" for a given stock + takaran list */
+function takaranSummary(currentStock: number, takaran: TakaranOption[]): string {
+  return takaran
+    .map((t) => `≈${Math.floor(currentStock / t.amount)} ${t.name}`)
+    .join(" · ");
 }
 
 interface RecipeIngredient {
-  inventoryItemId: string;
+  inventoryItemId: string | null; // null = free-text ingredient (no stock deduction)
   inventoryItemName: string;
   quantity: number;
   unit: string;
+  unitAmount: number | null; // grams/ml per 1 unit — used for stock deduction
+}
+
+interface RecipePrices {
+  retail: number; ds: number; sc: number; sbQp: number; spv: number;
 }
 
 interface Recipe {
@@ -41,9 +61,23 @@ interface Recipe {
   linkedProductId: string | null;
   linkedProductName: string | null;
   ingredients: RecipeIngredient[];
+  prices: RecipePrices | null;
   isActive: boolean;
   createdAt: string;
 }
+
+const PRICE_TIERS: { key: keyof RecipePrices; label: string }[] = [
+  { key: "retail", label: "Retail" },
+  { key: "ds",     label: "DS" },
+  { key: "sc",     label: "SC" },
+  { key: "sbQp",   label: "SB-QP" },
+  { key: "spv",    label: "SPV" },
+];
+
+const emptyPrices = (): RecipePrices => ({ retail: 0, ds: 0, sc: 0, sbQp: 0, spv: 0 });
+
+const fmtIdr = (n: number) =>
+  new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 
 interface MembershipVisit {
   id: string;
@@ -131,7 +165,7 @@ export default function ClubPage() {
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-200">
         {([
-          { key: "stok",   label: "📦 Stok",        desc: "Produk & Bahan Baku" },
+          { key: "stok",   label: "📦 Stok",        desc: "Stok produk club" },
           { key: "resep",  label: "📋 Resep",        desc: "Formula minuman" },
           { key: "absensi",label: "📅 Absensi",      desc: "Kunjungan member" },
         ] as { key: Tab; label: string; desc: string }[]).map(({ key, label, desc }) => (
@@ -179,9 +213,6 @@ export default function ClubPage() {
 function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [typeFilter, setTypeFilter] = useState<"all" | ItemType>("all");
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   // Single delete
@@ -192,12 +223,6 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
-
-  // Form state
-  const [ingName, setIngName] = useState("");
-  const [ingUnit, setIngUnit] = useState("");
-  const [ingCategory, setIngCategory] = useState("");
-  const [ingMinStock, setIngMinStock] = useState("0");
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -210,7 +235,11 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
           orderBy("name")
         )
       );
-      setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() } as InventoryItem)));
+      setItems(
+        snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as InventoryItem))
+          .filter((i) => (i.itemType ?? "product") === "product")
+      );
     } finally {
       setLoading(false);
     }
@@ -218,38 +247,7 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
 
   useEffect(() => { loadItems(); }, [loadItems]);
 
-  const displayed = typeFilter === "all"
-    ? items
-    : items.filter((i) => (i.itemType ?? "product") === typeFilter);
-
-  const products    = items.filter((i) => (i.itemType ?? "product") === "product");
-  const ingredients = items.filter((i) => i.itemType === "ingredient");
-  const lowStock    = items.filter((i) => i.currentStock <= i.minimumStock);
-
-  async function handleAddIngredient() {
-    if (!ingName.trim() || !ingUnit.trim()) {
-      setError("Nama dan satuan wajib diisi");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    try {
-      await callFunction("inventory_createIngredient", {
-        ownerId, clubId,
-        name: ingName.trim(),
-        unit: ingUnit.trim(),
-        category: ingCategory.trim() || undefined,
-        minimumStock: parseFloat(ingMinStock) || 0,
-      });
-      setIngName(""); setIngUnit(""); setIngCategory(""); setIngMinStock("0");
-      setShowAddModal(false);
-      loadItems();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Gagal menambah bahan baku");
-    } finally {
-      setSaving(false);
-    }
-  }
+  const lowStock = items.filter((i) => i.currentStock <= i.minimumStock);
 
   async function handleDelete() {
     if (!deleteTarget) return;
@@ -286,19 +284,14 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
     }
   }
 
-  // Checkbox helpers
-  const allDisplayedSelected =
-    displayed.length > 0 && displayed.every((i) => selectedIds.has(i.id));
-  const someDisplayedSelected = displayed.some((i) => selectedIds.has(i.id));
+  const allSelected = items.length > 0 && items.every((i) => selectedIds.has(i.id));
+  const someSelected = items.some((i) => selectedIds.has(i.id));
 
   function toggleAll() {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (allDisplayedSelected) {
-        displayed.forEach((i) => next.delete(i.id));
-      } else {
-        displayed.forEach((i) => next.add(i.id));
-      }
+      if (allSelected) { items.forEach((i) => next.delete(i.id)); }
+      else             { items.forEach((i) => next.add(i.id)); }
       return next;
     });
   }
@@ -314,12 +307,11 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
   return (
     <div className="flex flex-col gap-4">
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         {[
-          { label: "Total Item", value: items.length, color: "text-slate-800" },
-          { label: "Produk Jual", value: products.length, color: "text-green-700" },
-          { label: "Bahan Baku", value: ingredients.length, color: "text-violet-700" },
-          { label: "Stok Menipis", value: lowStock.length, color: lowStock.length > 0 ? "text-red-600" : "text-slate-400" },
+          { label: "Total Produk",  value: items.length,     color: "text-slate-800" },
+          { label: "Stok Aman",     value: items.length - lowStock.length, color: "text-green-700" },
+          { label: "Stok Menipis",  value: lowStock.length,  color: lowStock.length > 0 ? "text-red-600" : "text-slate-400" },
         ].map(({ label, value, color }) => (
           <div key={label} className="bg-white rounded-xl border border-slate-200 px-4 py-3">
             <p className="text-xs text-slate-400">{label}</p>
@@ -329,27 +321,11 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-3">
-        <div className="flex gap-1">
-          {([
-            { key: "all",        label: "Semua" },
-            { key: "product",    label: "Produk Jual" },
-            { key: "ingredient", label: "Bahan Baku" },
-          ] as { key: typeof typeFilter; label: string }[]).map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => { setTypeFilter(key); setSelectedIds(new Set()); }}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
-                typeFilter === key
-                  ? "bg-slate-800 text-white border-slate-800"
-                  : "border-slate-200 text-slate-500 hover:border-slate-400"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="ml-auto flex items-center gap-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-slate-400">
+          {selectedIds.size > 0 ? `${selectedIds.size} item dipilih` : `${items.length} produk`}
+        </p>
+        <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
             <button
               onClick={() => { setError(""); setBulkConfirmOpen(true); }}
@@ -358,20 +334,18 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
               🗑 Hapus {selectedIds.size} item
             </button>
           )}
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="px-4 py-2 bg-violet-600 text-white text-sm font-semibold rounded-xl hover:bg-violet-700 transition"
-          >
-            + Tambah Bahan Baku
-          </button>
+          <button onClick={loadItems} className="text-xs text-blue-600 hover:underline font-medium">Refresh</button>
         </div>
       </div>
 
       {/* Table */}
       {loading ? (
         <div className="text-center py-12 text-slate-400 text-sm">Memuat…</div>
-      ) : displayed.length === 0 ? (
-        <div className="text-center py-12 text-slate-400 text-sm">Tidak ada item.</div>
+      ) : items.length === 0 ? (
+        <div className="text-center py-12 text-slate-400 text-sm">
+          Belum ada produk di stok club ini.<br />
+          <span className="text-xs">Transfer produk dari gudang owner untuk mengisi stok.</span>
+        </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <table className="w-full text-sm">
@@ -380,14 +354,13 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
                 <th className="pl-4 pr-2 py-3 w-8">
                   <input
                     type="checkbox"
-                    checked={allDisplayedSelected}
-                    ref={(el) => { if (el) el.indeterminate = someDisplayedSelected && !allDisplayedSelected; }}
+                    checked={allSelected}
+                    ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
                     onChange={toggleAll}
                     className="rounded cursor-pointer"
                   />
                 </th>
-                <th className="px-4 py-3 text-left">Nama</th>
-                <th className="px-4 py-3 text-left">Tipe</th>
+                <th className="px-4 py-3 text-left">Nama Produk</th>
                 <th className="px-4 py-3 text-left">Kategori</th>
                 <th className="px-4 py-3 text-right">Stok</th>
                 <th className="px-4 py-3 text-right">Min</th>
@@ -396,42 +369,31 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {displayed.map((item) => {
-                const isLow = item.currentStock <= item.minimumStock;
-                const isIngredient = item.itemType === "ingredient";
+              {items.map((item) => {
+                const isLow     = item.currentStock <= item.minimumStock;
                 const isChecked = selectedIds.has(item.id);
                 return (
-                  <tr
-                    key={item.id}
-                    className={`hover:bg-slate-50 group ${isChecked ? "bg-red-50/40" : ""}`}
-                  >
+                  <tr key={item.id} className={`hover:bg-slate-50 group ${isChecked ? "bg-red-50/40" : ""}`}>
                     <td className="pl-4 pr-2 py-3">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => toggleOne(item.id)}
-                        className="rounded cursor-pointer"
-                      />
+                      <input type="checkbox" checked={isChecked} onChange={() => toggleOne(item.id)} className="rounded cursor-pointer" />
                     </td>
                     <td className="px-4 py-3 font-medium text-slate-800">{item.name}</td>
-                    <td className="px-4 py-3">
-                      {isIngredient ? (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-100 text-violet-700">Bahan Baku</span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">Produk</span>
-                      )}
-                    </td>
                     <td className="px-4 py-3 text-slate-500 text-xs">{item.category ?? "—"}</td>
-                    <td className={`px-4 py-3 text-right font-semibold ${isLow ? "text-red-600" : "text-slate-800"}`}>
-                      {item.currentStock} <span className="text-xs font-normal text-slate-400">{item.unit}</span>
+                    <td className={`px-4 py-3 text-right ${isLow ? "text-red-600" : "text-slate-800"}`}>
+                      <span className="font-semibold">{item.currentStock}</span>
+                      <span className="text-xs font-normal text-slate-400 ml-1">{item.unit}</span>
+                      {item.takaran?.length ? (
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {takaranSummary(item.currentStock, item.takaran)}
+                        </p>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 text-right text-slate-400 text-xs">{item.minimumStock}</td>
                     <td className="px-4 py-3 text-center">
-                      {isLow ? (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-600">Menipis ⚠</span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-600">OK</span>
-                      )}
+                      {isLow
+                        ? <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-600">Menipis ⚠</span>
+                        : <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-600">OK</span>
+                      }
                     </td>
                     <td className="px-2 py-3 text-center">
                       <button
@@ -454,15 +416,16 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
       {bulkConfirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <p className="font-bold text-slate-900 mb-1">Hapus {selectedIds.size} Item?</p>
-            <p className="text-xs text-slate-400 mb-3">Item berikut akan dihapus dari daftar stok:</p>
+            <p className="font-bold text-slate-900 mb-1">Hapus {selectedIds.size} Produk?</p>
+            <p className="text-xs text-slate-400 mb-3">Produk berikut akan dihapus dari stok club:</p>
             <ul className="mb-4 max-h-48 overflow-y-auto space-y-1">
               {items.filter((i) => selectedIds.has(i.id)).map((i) => (
                 <li key={i.id} className="flex items-center justify-between text-sm px-3 py-1.5 bg-red-50 rounded-lg">
                   <span className="font-medium text-slate-800">{i.name}</span>
                   {i.currentStock > 0 && (
-                    <span className="text-xs text-amber-600 font-semibold ml-2 shrink-0">
-                      stok: {i.currentStock} {i.unit}
+                    <span className="text-xs text-amber-600 font-semibold ml-2 shrink-0text-right">
+                      {i.currentStock} {i.unit}
+                      {i.takaran?.length ? ` (${takaranSummary(i.currentStock, i.takaran)})` : ""}
                     </span>
                   )}
                 </li>
@@ -470,18 +433,9 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
             </ul>
             {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
             <div className="flex gap-3">
-              <button
-                onClick={() => { setBulkConfirmOpen(false); setError(""); }}
-                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50"
-              >
-                Batal
-              </button>
-              <button
-                onClick={handleBulkDelete}
-                disabled={bulkDeleting}
-                className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
-              >
-                {bulkDeleting ? "Menghapus…" : `Ya, Hapus ${selectedIds.size} Item`}
+              <button onClick={() => { setBulkConfirmOpen(false); setError(""); }} className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50">Batal</button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting} className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-50">
+                {bulkDeleting ? "Menghapus…" : `Ya, Hapus ${selectedIds.size} Produk`}
               </button>
             </div>
           </div>
@@ -492,65 +446,22 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <p className="font-bold text-slate-900 mb-1">Hapus Item?</p>
-            <p className="text-sm text-slate-600 mb-1">
-              <span className="font-semibold">{deleteTarget.name}</span>
-            </p>
+            <p className="font-bold text-slate-900 mb-1">Hapus Produk dari Stok?</p>
+            <p className="text-sm text-slate-600 mb-1"><span className="font-semibold">{deleteTarget.name}</span></p>
             <p className="text-xs text-slate-400 mb-4">
               {deleteTarget.currentStock > 0
-                ? `Stok saat ini: ${deleteTarget.currentStock} ${deleteTarget.unit}. Item akan dihapus dari daftar stok.`
-                : "Item akan dihapus dari daftar stok."}
+                ? `Stok saat ini: ${deleteTarget.currentStock} ${deleteTarget.unit}${
+                    deleteTarget.takaran?.length
+                      ? ` (${takaranSummary(deleteTarget.currentStock, deleteTarget.takaran)})`
+                      : ""
+                  }. Produk akan dihapus dari daftar stok club.`
+                : "Produk akan dihapus dari daftar stok club."}
             </p>
             {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
             <div className="flex gap-3">
-              <button
-                onClick={() => { setDeleteTarget(null); setError(""); }}
-                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50"
-              >
-                Batal
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleting}
-                className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
-              >
+              <button onClick={() => { setDeleteTarget(null); setError(""); }} className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50">Batal</button>
+              <button onClick={handleDelete} disabled={deleting} className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-50">
                 {deleting ? "Menghapus…" : "Ya, Hapus"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add ingredient modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <h3 className="text-base font-bold text-slate-900 mb-4">Tambah Bahan Baku</h3>
-            {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-slate-500 block mb-1">Nama Bahan Baku *</label>
-                <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Contoh: Protein Powder" value={ingName} onChange={(e) => setIngName(e.target.value)} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-slate-500 block mb-1">Satuan *</label>
-                  <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="gram / ml / scoops" value={ingUnit} onChange={(e) => setIngUnit(e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-500 block mb-1">Min Stok</label>
-                  <input type="number" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="0" value={ingMinStock} onChange={(e) => setIngMinStock(e.target.value)} />
-                </div>
-              </div>
-              <div>
-                <label className="text-xs text-slate-500 block mb-1">Kategori</label>
-                <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" placeholder="Opsional" value={ingCategory} onChange={(e) => setIngCategory(e.target.value)} />
-              </div>
-            </div>
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => { setShowAddModal(false); setError(""); }} className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50">Batal</button>
-              <button onClick={handleAddIngredient} disabled={saving} className="flex-1 bg-violet-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-violet-700 disabled:opacity-50">
-                {saving ? "Menyimpan…" : "Simpan"}
               </button>
             </div>
           </div>
@@ -565,20 +476,10 @@ function StokTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function ResepTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
+  // ── Data ─────────────────────────────────────────────────────────────────────
   const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [products, setProducts] = useState<InventoryItem[]>([]);
-  const [ingredients, setIngredients] = useState<InventoryItem[]>([]);
+  const [products, setProducts] = useState<InventoryItem[]>([]); // club stock — for ingredient suggestions
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<Recipe | "new" | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState("");
-
-  // Form state
-  const [formName, setFormName] = useState("");
-  const [formProductId, setFormProductId] = useState("");
-  const [formIngredients, setFormIngredients] = useState<RecipeIngredient[]>([]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -592,7 +493,6 @@ function ResepTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
       setRecipes(recipeSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Recipe)));
       const allItems = itemSnap.docs.map((d) => ({ id: d.id, ...d.data() } as InventoryItem));
       setProducts(allItems.filter((i) => (i.itemType ?? "product") === "product"));
-      setIngredients(allItems.filter((i) => i.itemType === "ingredient"));
     } finally {
       setLoading(false);
     }
@@ -600,250 +500,519 @@ function ResepTab({ ownerId, clubId }: { ownerId: string; clubId: string }) {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // ── Form state ───────────────────────────────────────────────────────────────
+  const [selected, setSelected] = useState<Recipe | "new" | null>(null);
+  const [recipeDeleteTarget, setRecipeDeleteTarget] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [recipeError, setRecipeError] = useState("");
+  const [formName, setFormName] = useState("");
+  const [formPrices, setFormPrices] = useState<RecipePrices>(emptyPrices());
+  const [formIngredients, setFormIngredients] = useState<RecipeIngredient[]>([]);
+  const [ingDropdownOpenIdx, setIngDropdownOpenIdx] = useState<number | null>(null);
+
+  const emptyRow = (): RecipeIngredient => ({
+    inventoryItemId: null, inventoryItemName: "", quantity: 1, unit: "", unitAmount: null,
+  });
+
   function openNew() {
     setSelected("new");
     setFormName("");
-    setFormProductId("");
-    setFormIngredients([{ inventoryItemId: "", inventoryItemName: "", quantity: 1, unit: "" }]);
-    setError("");
+    setFormPrices(emptyPrices());
+    setFormIngredients([emptyRow()]);
+    setRecipeError("");
   }
 
   function openEdit(r: Recipe) {
     setSelected(r);
     setFormName(r.name);
-    setFormProductId(r.linkedProductId ?? "");
-    setFormIngredients(r.ingredients.length > 0 ? r.ingredients : [{ inventoryItemId: "", inventoryItemName: "", quantity: 1, unit: "" }]);
-    setError("");
+    setFormPrices(r.prices ?? emptyPrices());
+    setFormIngredients(r.ingredients.length > 0 ? r.ingredients : [emptyRow()]);
+    setRecipeError("");
   }
 
   function addIngredientRow() {
-    setFormIngredients((prev) => [...prev, { inventoryItemId: "", inventoryItemName: "", quantity: 1, unit: "" }]);
+    setFormIngredients((prev) => [...prev, emptyRow()]);
   }
 
   function removeIngredientRow(idx: number) {
     setFormIngredients((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  function updateIngredientRow(idx: number, field: keyof RecipeIngredient, value: string | number) {
+  function setIngRowName(idx: number, name: string) {
     setFormIngredients((prev) =>
-      prev.map((row, i) => {
-        if (i !== idx) return row;
-        if (field === "inventoryItemId") {
-          const item = ingredients.find((ing) => ing.id === value);
-          return { ...row, inventoryItemId: value as string, inventoryItemName: item?.name ?? "", unit: item?.unit ?? "" };
-        }
-        return { ...row, [field]: value };
+      prev.map((row, i) => i !== idx ? row : {
+        ...row, inventoryItemName: name, inventoryItemId: null, unitAmount: null,
       })
     );
   }
 
-  async function handleSave() {
-    if (!formName.trim()) { setError("Nama resep wajib diisi"); return; }
-    const validIng = formIngredients.filter((i) => i.inventoryItemId && i.quantity > 0);
-    if (validIng.length === 0) { setError("Minimal satu bahan baku"); return; }
+  function setIngRowProduct(idx: number, p: InventoryItem) {
+    // Auto-select first takaran option if the product has serving data
+    const firstTakaran = p.takaran?.[0] ?? null;
+    setFormIngredients((prev) =>
+      prev.map((row, i) => i !== idx ? row : {
+        ...row,
+        inventoryItemId: p.id,
+        inventoryItemName: p.name,
+        unit: firstTakaran ? firstTakaran.name : (row.unit || p.unit),
+        unitAmount: firstTakaran ? firstTakaran.amount : null,
+      })
+    );
+  }
 
+  function setIngRowQty(idx: number, qty: number) {
+    setFormIngredients((prev) => prev.map((row, i) => i !== idx ? row : { ...row, quantity: qty }));
+  }
+
+  function setIngRowUnit(idx: number, unit: string) {
+    setFormIngredients((prev) => prev.map((row, i) => i !== idx ? row : { ...row, unit, unitAmount: null }));
+  }
+
+  /** Called when user picks a takaran from the dropdown (linked product has serving data). */
+  function setIngRowTakaran(idx: number, takaranName: string, linkedProduct: InventoryItem) {
+    const t = linkedProduct.takaran?.find((tk) => tk.name === takaranName) ?? null;
+    setFormIngredients((prev) =>
+      prev.map((row, i) => i !== idx ? row : {
+        ...row, unit: takaranName, unitAmount: t ? t.amount : null,
+      })
+    );
+  }
+
+  async function handleSaveRecipe() {
+    if (!formName.trim()) { setRecipeError("Nama menu wajib diisi"); return; }
+    const validIng = formIngredients.filter((i) => i.inventoryItemName.trim() && i.quantity > 0);
+    if (validIng.length === 0) { setRecipeError("Minimal satu bahan wajib diisi"); return; }
     setSaving(true);
-    setError("");
+    setRecipeError("");
+    // Only send prices if at least one tier has been set
+    const hasPrices = Object.values(formPrices).some((v) => v > 0);
+    const pricesPayload = hasPrices ? formPrices : null;
+
     try {
-      const linkedProduct = products.find((p) => p.id === formProductId);
       if (selected === "new") {
         await callFunction("club_createRecipe", {
-          ownerId, clubId,
-          name: formName.trim(),
-          linkedProductId: formProductId || undefined,
-          linkedProductName: linkedProduct?.name ?? undefined,
-          ingredients: validIng,
+          ownerId, clubId, name: formName.trim(), ingredients: validIng,
+          prices: pricesPayload,
         });
       } else if (selected) {
         await callFunction("club_updateRecipe", {
           ownerId, clubId,
-          recipeId: selected.id,
+          recipeId: (selected as Recipe).id,
           name: formName.trim(),
-          linkedProductId: formProductId || null,
-          linkedProductName: linkedProduct?.name ?? null,
           ingredients: validIng,
+          prices: pricesPayload,
         });
       }
       setSelected(null);
       loadData();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Gagal menyimpan resep");
+      setRecipeError(e instanceof Error ? e.message : "Gagal menyimpan menu");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDelete(recipeId: string) {
+  async function handleDeleteRecipe(recipeId: string) {
     setDeleting(true);
     try {
       await callFunction("club_deleteRecipe", { ownerId, clubId, recipeId });
-      setDeleteTarget(null);
-      if (selected !== "new" && selected?.id === recipeId) setSelected(null);
+      setRecipeDeleteTarget(null);
+      if (selected !== "new" && (selected as Recipe | null)?.id === recipeId) setSelected(null);
       loadData();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Gagal menghapus resep");
+      setRecipeError(e instanceof Error ? e.message : "Gagal menghapus menu");
     } finally {
       setDeleting(false);
     }
   }
 
+  // ── Render ────────────────────────────────────────────────────────────────────
   return (
-    <div className="flex gap-5 h-full">
-      {/* Left — recipe list */}
-      <div className="w-72 shrink-0 flex flex-col gap-3">
+    <div className="flex gap-5 h-full min-h-0">
+
+      {/* ── LEFT: menu list ────────────────────────────────────────────────────── */}
+      <div className="w-64 shrink-0 flex flex-col gap-3 overflow-y-auto">
         <button
+          type="button"
           onClick={openNew}
-          className="w-full py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition"
+          className="w-full py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition flex items-center justify-center gap-2 shrink-0"
         >
-          + Resep Baru
+          <span className="text-base leading-none">+</span> Menu Baru
         </button>
 
-        {loading ? (
-          <div className="text-center py-8 text-slate-400 text-sm">Memuat…</div>
-        ) : recipes.length === 0 ? (
-          <div className="text-center py-8 text-slate-400 text-sm">Belum ada resep.</div>
+        <div className="flex items-center justify-between px-0.5">
+          <span className="text-xs text-slate-400">{recipes.length} menu</span>
+          <button
+            type="button"
+            onClick={loadData}
+            className="text-xs text-blue-600 hover:underline font-medium"
+          >
+            {loading ? "Memuat…" : "Refresh"}
+          </button>
+        </div>
+
+        {recipes.length === 0 && !loading ? (
+          <div className="text-center py-10 text-slate-400 text-sm">
+            <p className="text-2xl mb-2">🍹</p>
+            <p>Belum ada menu.</p>
+            <p className="text-xs mt-1">Klik "+ Menu Baru" untuk mulai.</p>
+          </div>
         ) : (
           <div className="space-y-2">
-            {recipes.map((r) => (
-              <div
-                key={r.id}
-                onClick={() => openEdit(r)}
-                className={`p-3 rounded-xl border cursor-pointer transition ${
-                  selected !== "new" && (selected as Recipe | null)?.id === r.id
-                    ? "border-blue-400 bg-blue-50"
-                    : "border-slate-200 bg-white hover:border-slate-300"
-                }`}
-              >
-                <p className="text-sm font-semibold text-slate-800">{r.name}</p>
-                {r.linkedProductName && (
-                  <p className="text-xs text-slate-400 mt-0.5">→ {r.linkedProductName}</p>
-                )}
-                <p className="text-xs text-slate-400 mt-0.5">{r.ingredients.length} bahan</p>
-              </div>
-            ))}
+            {recipes.map((r) => {
+              const isSelected = selected !== "new" && (selected as Recipe | null)?.id === r.id;
+              const stockLinked = r.ingredients.filter((i) => i.inventoryItemId).length;
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => openEdit(r)}
+                  className={`w-full text-left p-3.5 rounded-xl border transition ${
+                    isSelected
+                      ? "border-blue-400 bg-blue-50 shadow-sm"
+                      : "border-slate-200 bg-white hover:border-blue-200 hover:bg-slate-50"
+                  }`}
+                >
+                  <p className={`text-sm font-semibold ${isSelected ? "text-blue-800" : "text-slate-800"}`}>
+                    {r.name}
+                  </p>
+                  {r.ingredients.length > 0 && (
+                    <p className="text-xs text-slate-400 mt-1 leading-relaxed line-clamp-2">
+                      {r.ingredients.map((i) => i.inventoryItemName).join(" · ")}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    <span className="text-[10px] text-slate-400">{r.ingredients.length} bahan</span>
+                    {stockLinked > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded-full font-semibold">
+                        📦 {stockLinked} dari stok
+                      </span>
+                    )}
+                    {r.prices ? (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-700 rounded-full font-semibold">
+                        {fmtIdr(r.prices.retail)}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded-full font-semibold">
+                        belum ada harga
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* Right — form */}
+      {/* ── RIGHT: form ────────────────────────────────────────────────────────── */}
       {selected !== null ? (
-        <div className="flex-1 bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-slate-800">{selected === "new" ? "Resep Baru" : "Edit Resep"}</h3>
-            {selected !== "new" && (
-              <button
-                onClick={() => setDeleteTarget(selected.id)}
-                className="text-xs text-red-500 hover:text-red-700 font-medium"
-              >
-                Hapus Resep
-              </button>
-            )}
-          </div>
+        <div className="flex-1 flex gap-4 min-h-0 overflow-y-auto">
 
-          {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
+          {/* Form card */}
+          <div className="flex-1 bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-5">
 
-          {/* Recipe name */}
-          <div>
-            <label className="text-xs text-slate-500 block mb-1">Nama Resep *</label>
-            <input
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Contoh: Shake Protein Vanila"
-              value={formName}
-              onChange={(e) => setFormName(e.target.value)}
-            />
-          </div>
-
-          {/* Linked product */}
-          <div>
-            <label className="text-xs text-slate-500 block mb-1">
-              Terhubung ke Produk POS
-              <span className="ml-1 text-slate-400">(opsional — bahan baku otomatis terpotong saat produk ini terjual)</span>
-            </label>
-            <select
-              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-              value={formProductId}
-              onChange={(e) => setFormProductId(e.target.value)}
-            >
-              <option value="">— Tidak ditautkan —</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Ingredients */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs text-slate-500 font-semibold uppercase tracking-wide">Bahan-bahan *</label>
-              <button onClick={addIngredientRow} className="text-xs text-blue-600 hover:underline font-medium">+ Tambah bahan</button>
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-800 text-base">
+                {selected === "new" ? "🍹 Menu Baru" : "✏️ Edit Menu"}
+              </h3>
+              {selected !== "new" && (
+                <button
+                  type="button"
+                  onClick={() => setRecipeDeleteTarget((selected as Recipe).id)}
+                  className="text-xs text-red-400 hover:text-red-600 font-medium"
+                >
+                  Hapus Menu
+                </button>
+              )}
             </div>
 
-            {ingredients.length === 0 && (
-              <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2 mb-2">
-                Belum ada bahan baku. Tambahkan di tab <strong>Stok → Tambah Bahan Baku</strong>.
-              </p>
+            {recipeError && (
+              <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
+                <span className="shrink-0">⚠</span>
+                <span>{recipeError}</span>
+              </div>
             )}
 
-            <div className="space-y-2">
-              {formIngredients.map((row, idx) => (
-                <div key={idx} className="flex gap-2 items-center">
-                  <select
-                    className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-                    value={row.inventoryItemId}
-                    onChange={(e) => updateIngredientRow(idx, "inventoryItemId", e.target.value)}
-                  >
-                    <option value="">— Pilih bahan —</option>
-                    {ingredients.map((ing) => (
-                      <option key={ing.id} value={ing.id}>{ing.name} ({ing.unit})</option>
-                    ))}
-                  </select>
-                  <input
-                    type="number"
-                    min="0.001"
-                    step="0.1"
-                    className="w-20 border border-slate-200 rounded-lg px-3 py-2 text-sm text-right"
-                    placeholder="Qty"
-                    value={row.quantity}
-                    onChange={(e) => updateIngredientRow(idx, "quantity", parseFloat(e.target.value) || 0)}
-                  />
-                  <span className="text-xs text-slate-400 w-12 text-center">{row.unit}</span>
-                  <button
-                    onClick={() => removeIngredientRow(idx)}
-                    disabled={formIngredients.length === 1}
-                    className="text-slate-300 hover:text-red-500 disabled:opacity-30 text-lg leading-none"
-                  >
-                    ×
-                  </button>
+            {/* Nama Menu */}
+            <div>
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">
+                Nama Menu
+              </label>
+              <input
+                autoFocus={selected === "new"}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                placeholder="Contoh: Shake Protein Vanila, Tropical Smoothie…"
+                value={formName}
+                onChange={(e) => { setFormName(e.target.value); if (recipeError) setRecipeError(""); }}
+                onKeyDown={(e) => { if (e.key === "Enter") document.getElementById("first-ing-input")?.focus(); }}
+              />
+            </div>
+
+            {/* Harga per Tier */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                  Harga Jual
+                </label>
+                <span className="text-[11px] text-slate-400">per tier pelanggan</span>
+              </div>
+              <div className="grid grid-cols-5 gap-1.5">
+                {PRICE_TIERS.map((t) => (
+                  <div key={t.key}>
+                    <label className="block text-[10px] text-slate-400 mb-1 text-center">{t.label}</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1000"
+                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-right focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      placeholder="0"
+                      value={formPrices[t.key] || ""}
+                      onChange={(e) => setFormPrices((p) => ({ ...p, [t.key]: parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+                ))}
+              </div>
+              {Object.values(formPrices).every((v) => v === 0) && (
+                <p className="text-[11px] text-amber-600 mt-1.5">
+                  ⚠ Menu tanpa harga tidak akan muncul di POS operator.
+                </p>
+              )}
+            </div>
+
+            {/* Bahan-bahan */}
+            <div className="flex-1 flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                  Bahan-bahan
+                </label>
+                <span className="text-[11px] text-slate-400">
+                  📦 = stok terpotong · ✏️ = bebas
+                </span>
+              </div>
+
+              {/* Table */}
+              <div className="rounded-xl border border-slate-200 overflow-visible">
+                {/* Column headers */}
+                <div className="grid grid-cols-[1fr_76px_86px_32px] bg-slate-50 border-b border-slate-200 rounded-t-xl">
+                  <div className="px-3 py-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Bahan</div>
+                  <div className="px-2 py-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wide text-right">Jumlah</div>
+                  <div className="px-2 py-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Satuan</div>
+                  <div />
                 </div>
-              ))}
+
+                <div className="divide-y divide-slate-100">
+                  {formIngredients.map((row, idx) => {
+                    const suggestions = products.filter((p) =>
+                      !row.inventoryItemName.trim()
+                        ? true
+                        : p.name.toLowerCase().includes(row.inventoryItemName.toLowerCase().trim())
+                    );
+                    const isLinked = !!row.inventoryItemId;
+                    const linkedProduct = isLinked ? products.find((p) => p.id === row.inventoryItemId) : null;
+
+                    return (
+                      <div key={idx} className="grid grid-cols-[1fr_76px_86px_32px] items-center">
+                        {/* Bahan — combobox */}
+                        <div className="relative px-2 py-1.5">
+                          <div className="relative">
+                            <input
+                              id={idx === 0 ? "first-ing-input" : undefined}
+                              className={`w-full border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 pr-12 ${
+                                isLinked ? "border-blue-300 bg-blue-50/50" : "border-slate-200 bg-white"
+                              }`}
+                              placeholder="Ketik atau pilih…"
+                              value={row.inventoryItemName}
+                              onChange={(e) => { setIngRowName(idx, e.target.value); setIngDropdownOpenIdx(idx); }}
+                              onFocus={() => setIngDropdownOpenIdx(idx)}
+                              onBlur={() => setTimeout(() => setIngDropdownOpenIdx(null), 150)}
+                              onKeyDown={(e) => { if (e.key === "Escape") setIngDropdownOpenIdx(null); }}
+                            />
+                            <span className={`absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] px-1 py-0.5 rounded-full font-bold whitespace-nowrap ${
+                              isLinked ? "bg-blue-100 text-blue-600" : "bg-slate-100 text-slate-400"
+                            }`}>
+                              {isLinked
+                                ? `📦${linkedProduct ? ` ${linkedProduct.currentStock}` : ""}`
+                                : "✏️"}
+                            </span>
+                          </div>
+                          {/* Dropdown suggestions */}
+                          {ingDropdownOpenIdx === idx && suggestions.length > 0 && (
+                            <div className="absolute z-30 left-2 right-2 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto">
+                              <p className="text-[10px] text-slate-400 px-3 pt-2 pb-1 font-semibold uppercase tracking-wide">
+                                Stok produk club
+                              </p>
+                              {suggestions.map((p) => (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  onMouseDown={() => { setIngRowProduct(idx, p); setIngDropdownOpenIdx(null); }}
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-center justify-between gap-2"
+                                >
+                                  <span className="font-medium text-slate-800">{p.name}</span>
+                                  <span className="text-xs text-slate-400 shrink-0">
+                                    stok {p.currentStock} {p.unit}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Jumlah */}
+                        <div className="px-1.5 py-1.5">
+                          <input
+                            type="number"
+                            min="0.001"
+                            step="0.1"
+                            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-blue-400"
+                            placeholder="0"
+                            value={row.quantity}
+                            onChange={(e) => setIngRowQty(idx, parseFloat(e.target.value) || 0)}
+                          />
+                        </div>
+
+                        {/* Satuan — dropdown when linked product has takaran, else free-text */}
+                        <div className="px-1.5 py-1.5">
+                          {linkedProduct?.takaran?.length ? (() => {
+                            // Check if current unit matches a known takaran option
+                            const unitMatchesTakaran = linkedProduct.takaran.some(
+                              (t) => t.name === row.unit
+                            );
+                            return (
+                              <select
+                                className="w-full border border-blue-200 rounded-lg px-2 py-1.5 text-sm bg-blue-50/50 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                value={row.unit}
+                                onChange={(e) => setIngRowTakaran(idx, e.target.value, linkedProduct)}
+                              >
+                                <option value="">Pilih takaran…</option>
+                                {linkedProduct.takaran.map((t) => (
+                                  <option key={t.name} value={t.name}>
+                                    {t.name} ({t.amount}{linkedProduct.baseUnit ?? "g"})
+                                  </option>
+                                ))}
+                                {/* Preserve old unit value that doesn't match any takaran */}
+                                {row.unit && !unitMatchesTakaran && (
+                                  <option value={row.unit} disabled>
+                                    {row.unit} ⚠ bukan takaran standar
+                                  </option>
+                                )}
+                              </select>
+                            );
+                          })() : (
+                            <input
+                              className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                              placeholder="gram, ml…"
+                              value={row.unit}
+                              onChange={(e) => setIngRowUnit(idx, e.target.value)}
+                            />
+                          )}
+                        </div>
+
+                        {/* Hapus */}
+                        <div className="flex justify-center">
+                          <button
+                            type="button"
+                            onClick={() => removeIngredientRow(idx)}
+                            disabled={formIngredients.length === 1}
+                            className="text-slate-300 hover:text-red-400 disabled:opacity-20 transition p-1"
+                            title="Hapus bahan"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Add row */}
+              <button
+                type="button"
+                onClick={addIngredientRow}
+                className="w-full py-2 border border-dashed border-slate-300 rounded-xl text-sm text-slate-400 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/50 transition font-medium"
+              >
+                + Tambah bahan
+              </button>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setSelected(null)}
+                className="border border-slate-200 text-slate-600 rounded-xl px-5 py-2.5 text-sm font-semibold hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveRecipe}
+                disabled={saving}
+                className="flex-1 bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {saving && <span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                {saving ? "Menyimpan…" : "Simpan Menu"}
+              </button>
             </div>
           </div>
 
-          {/* Actions */}
-          <div className="flex gap-3 mt-auto pt-3 border-t border-slate-100">
-            <button onClick={() => setSelected(null)} className="border border-slate-200 text-slate-600 rounded-xl px-4 py-2.5 text-sm font-semibold hover:bg-slate-50">
-              Batal
-            </button>
-            <button onClick={handleSave} disabled={saving} className="flex-1 bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
-              {saving ? "Menyimpan…" : "Simpan Resep"}
-            </button>
+          {/* Cara Pakai */}
+          <div className="w-40 shrink-0">
+            <div className="bg-green-50 border border-green-200 rounded-xl p-4 sticky top-0">
+              <p className="text-sm font-bold text-green-800 mb-3">Cara Pakai</p>
+              <ol className="text-xs text-green-700 space-y-2.5">
+                {[
+                  "Isi nama menu",
+                  "Ketik nama bahan — pilih dari stok club (📦) agar stok terpotong otomatis, atau ketik bebas (✏️)",
+                  "Isi jumlah & satuan",
+                  "Tambah bahan berikutnya",
+                  "Simpan",
+                ].map((step, i) => (
+                  <li key={i} className="flex items-start gap-1.5">
+                    <span className="shrink-0 w-4 h-4 bg-green-200 text-green-800 rounded-full text-[10px] font-bold flex items-center justify-center mt-0.5">
+                      {i + 1}
+                    </span>
+                    <span>{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-slate-300 text-sm">
-          Pilih resep untuk diedit, atau buat resep baru.
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-300">
+          <span className="text-5xl">🍹</span>
+          <p className="text-sm font-medium">Pilih menu untuk diedit</p>
+          <p className="text-xs">atau klik <strong className="text-blue-400">+ Menu Baru</strong></p>
         </div>
       )}
 
-      {/* Delete confirm dialog */}
-      {deleteTarget && (
+      {/* Delete confirm */}
+      {recipeDeleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-xs mx-4">
-            <p className="font-bold text-slate-900 mb-2">Hapus Resep?</p>
-            <p className="text-sm text-slate-500 mb-5">Resep ini tidak akan lagi memotong stok bahan baku saat produk terjual.</p>
+            <p className="font-bold text-slate-900 mb-2">Hapus Menu?</p>
+            <p className="text-sm text-slate-500 mb-5">
+              Menu ini akan dihapus. Stok bahan tidak akan terpotong lagi saat menu ini terjual.
+            </p>
             <div className="flex gap-3">
-              <button onClick={() => setDeleteTarget(null)} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-semibold">Batal</button>
-              <button onClick={() => handleDelete(deleteTarget)} disabled={deleting} className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold disabled:opacity-50">
+              <button
+                type="button"
+                onClick={() => setRecipeDeleteTarget(null)}
+                className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-semibold"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteRecipe(recipeDeleteTarget)}
+                disabled={deleting}
+                className="flex-1 bg-red-600 text-white rounded-xl py-2.5 text-sm font-semibold disabled:opacity-50"
+              >
                 {deleting ? "Menghapus…" : "Ya, Hapus"}
               </button>
             </div>

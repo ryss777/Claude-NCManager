@@ -111,6 +111,11 @@ export const inventory_addFromCatalog = onCall(async (request) => {
     category: catalog["category"] as string,
     prices: catalog["prices"],
     unit,
+    // Denormalize serving data so transfer function can convert packages → grams
+    netWeight: catalog["netWeight"] ?? null,
+    baseUnit: catalog["baseUnit"] ?? null,
+    servingsPerContainer: catalog["servingsPerContainer"] ?? null,
+    takaran: catalog["takaran"] ?? null,
     currentStock: 0,
     minimumStock,
     isActive: true,

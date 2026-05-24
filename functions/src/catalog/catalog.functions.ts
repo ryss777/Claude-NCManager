@@ -18,6 +18,11 @@ export const catalog_createProduct = onCall(async (request) => {
     name: payload.name,
     category: payload.category,
     prices: payload.prices,
+    // Serving / takaran data (null when not provided)
+    netWeight: payload.netWeight ?? null,
+    baseUnit: payload.baseUnit ?? null,
+    servingsPerContainer: payload.servingsPerContainer ?? null,
+    takaran: payload.takaran ?? null,
     isActive: true,
     createdAt: now,
     updatedAt: now,
@@ -42,6 +47,10 @@ export const catalog_updateProduct = onCall(async (request) => {
   if (fields.name != null) updates["name"] = fields.name;
   if (fields.category != null) updates["category"] = fields.category;
   if (fields.prices != null) updates["prices"] = fields.prices;
+  if (fields.netWeight !== undefined) updates["netWeight"] = fields.netWeight ?? null;
+  if (fields.baseUnit !== undefined) updates["baseUnit"] = fields.baseUnit ?? null;
+  if (fields.servingsPerContainer !== undefined) updates["servingsPerContainer"] = fields.servingsPerContainer ?? null;
+  if (fields.takaran !== undefined) updates["takaran"] = fields.takaran ?? null;
 
   await ref.update(updates);
   return { productId };

@@ -197,6 +197,16 @@ export const productTransfer_create = onCall(async (request) => {
           if (!srcSnap || !srcSnap.exists) continue;
           const srcData = srcSnap.data()!;
 
+          // If the product has serving data, track club stock in base units (g/ml).
+          // e.g. 2 boxes × 550 g/box = 1100 g in club stock.
+          const hasServingData = srcData["baseUnit"] && srcData["netWeight"];
+          const clubUnit = hasServingData
+            ? (srcData["baseUnit"] as string)
+            : (srcData["unit"] ?? "pcs");
+          const clubStock = hasServingData
+            ? item.quantity * (srcData["netWeight"] as number)
+            : item.quantity;
+
           const newItemRef = db
             .collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, destinationClubId!))
             .doc();
@@ -208,8 +218,13 @@ export const productTransfer_create = onCall(async (request) => {
             name: item.productName,
             category: srcData["category"] ?? null,
             prices: srcData["prices"] ?? null,
-            unit: srcData["unit"] ?? "pcs",
-            currentStock: item.quantity,
+            unit: clubUnit,
+            // Serving data — denormalized for recipe form & display
+            netWeight: srcData["netWeight"] ?? null,
+            baseUnit: srcData["baseUnit"] ?? null,
+            servingsPerContainer: srcData["servingsPerContainer"] ?? null,
+            takaran: srcData["takaran"] ?? null,
+            currentStock: clubStock,
             minimumStock: 0,
             isActive: true,
             createdAt: now,
@@ -219,12 +234,18 @@ export const productTransfer_create = onCall(async (request) => {
             ...movBase,
             inventoryItemId: newItemRef.id,
             stockBefore: 0,
-            stockAfter: item.quantity,
+            stockAfter: clubStock,
           });
         } else {
           // Club already has this product — increment stock
-          const currentStock = destSnap.data()!["currentStock"] as number;
-          const stockAfter = currentStock + item.quantity;
+          const destData = destSnap.data()!;
+          const currentStock = destData["currentStock"] as number;
+          // Use same conversion if item already has serving data
+          const hasServingData = destData["baseUnit"] && destData["netWeight"];
+          const stockDelta = hasServingData
+            ? item.quantity * (destData["netWeight"] as number)
+            : item.quantity;
+          const stockAfter = currentStock + stockDelta;
           tx.set(movRef, {
             ...movBase,
             inventoryItemId: destSnap.id,
@@ -234,9 +255,39 @@ export const productTransfer_create = onCall(async (request) => {
           tx.update(destSnap.ref, { currentStock: stockAfter, updatedAt: now });
         }
       }
+
+      // 5. Write transfer history record to destination club's transactions
+      const txHistRef = db
+        .collection(COLLECTIONS.TRANSACTIONS(ownerId, destinationClubId!))
+        .doc(transferRef.id);
+      tx.set(txHistRef, {
+        id: txHistRef.id,
+        type: "transfer",
+        ownerId,
+        clubId: destinationClubId,
+        customerId: null,
+        transferId: transferRef.id,
+        direction: "in",
+        sourceLabel: "Gudang Owner",
+        items: items.map((i) => ({
+          productId: i.productId,
+          productName: i.productName,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+          subtotal: i.subtotal,
+        })),
+        total,
+        paymentType,
+        priceTier,
+        notes: notes ?? null,
+        status: "completed",
+        operatorId: null,
+        createdBy: "owner",
+        createdAt: now,
+      });
     }
 
-    // 5. Notification to destination owner (cross-owner only)
+    // 6. Notification to destination owner (cross-owner only)
     if (destinationType === "owner" && destinationOwnerId) {
       const notifRef = db
         .collection(COLLECTIONS.OWNER_NOTIFICATIONS(destinationOwnerId))
@@ -381,6 +432,14 @@ export const productTransfer_accept = onCall(async (request) => {
       if (!destSnap || !destSnap.exists) {
         // Club doesn't have this item yet — create it
         const catData = catalogDataMap.get(item.productCatalogId);
+        const hasServingData = catData?.["baseUnit"] && catData?.["netWeight"];
+        const clubUnit = hasServingData
+          ? (catData!["baseUnit"] as string)
+          : (catData?.["unit"] ?? "pcs");
+        const clubStock = hasServingData
+          ? item.quantity * (catData!["netWeight"] as number)
+          : item.quantity;
+
         const newItemRef = db
           .collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, destinationClubId))
           .doc();
@@ -392,22 +451,61 @@ export const productTransfer_accept = onCall(async (request) => {
           name: item.productName,
           category: catData?.["category"] ?? null,
           prices: catData?.["prices"] ?? null,
-          unit: catData?.["unit"] ?? "pcs",
-          currentStock: item.quantity,
+          unit: clubUnit,
+          netWeight: catData?.["netWeight"] ?? null,
+          baseUnit: catData?.["baseUnit"] ?? null,
+          servingsPerContainer: catData?.["servingsPerContainer"] ?? null,
+          takaran: catData?.["takaran"] ?? null,
+          currentStock: clubStock,
           minimumStock: 0,
           isActive: true,
           createdAt: now,
           updatedAt: now,
         });
-        tx.set(movRef, { ...movBase, inventoryItemId: newItemRef.id, stockBefore: 0, stockAfter: item.quantity });
+        tx.set(movRef, { ...movBase, inventoryItemId: newItemRef.id, stockBefore: 0, stockAfter: clubStock });
       } else {
         // Club already has this item — increment stock
-        const currentStock = destSnap.data()!["currentStock"] as number;
-        const stockAfter = currentStock + item.quantity;
+        const destData = destSnap.data()!;
+        const currentStock = destData["currentStock"] as number;
+        const hasServingData = destData["baseUnit"] && destData["netWeight"];
+        const stockDelta = hasServingData
+          ? item.quantity * (destData["netWeight"] as number)
+          : item.quantity;
+        const stockAfter = currentStock + stockDelta;
         tx.set(movRef, { ...movBase, inventoryItemId: destSnap.id, stockBefore: currentStock, stockAfter });
         tx.update(destSnap.ref, { currentStock: stockAfter, updatedAt: now });
       }
     }
+
+    // 1b. Write transfer history record to destination club's transactions
+    const txHistRef = db
+      .collection(COLLECTIONS.TRANSACTIONS(ownerId, destinationClubId))
+      .doc(transferId);
+    tx.set(txHistRef, {
+      id: txHistRef.id,
+      type: "transfer",
+      ownerId,
+      clubId: destinationClubId,
+      customerId: null,
+      transferId,
+      direction: "in",
+      sourceLabel: `Owner ${sourceOwnerId}`,
+      items: items.map((i) => ({
+        productId: i.productId,
+        productName: i.productName,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        subtotal: i.subtotal,
+      })),
+      total,
+      paymentType,
+      priceTier: transfer["priceTier"] as string,
+      notes: (transfer["notes"] as string | null) ?? null,
+      status: "completed",
+      operatorId: null,
+      createdBy: "owner",
+      createdAt: now,
+    });
 
     // 2. Mark transfer as completed
     tx.update(transferRef, {

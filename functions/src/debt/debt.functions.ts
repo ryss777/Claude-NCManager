@@ -51,7 +51,10 @@ export const debt_recordPayment = onCall(async (request) => {
     paidAt: now,
   };
 
+  const txRef = db.collection(COLLECTIONS.TRANSACTIONS(ownerId, clubId)).doc();
+
   await db.runTransaction(async (tx) => {
+    // 1. Update debt record
     tx.update(debtRef, {
       paidAmount: newPaidAmount,
       remainingAmount: newRemainingAmount,
@@ -60,6 +63,39 @@ export const debt_recordPayment = onCall(async (request) => {
       updatedAt: now,
     });
 
+    // 2. Create transaction record so cicilan appears in riwayat transaksi
+    tx.set(txRef, {
+      id: txRef.id,
+      ownerId,
+      clubId,
+      type: "debt_payment",
+      customerId: debt["customerId"] as string,
+      debtId,
+      referenceLabel: debt["referenceLabel"] as string,
+      operatorId: null,
+      deviceId: null,
+      shiftId: null,
+      membershipId: null,
+      items: [],
+      subtotal: amount,
+      discount: 0,
+      total: amount,
+      paymentMethod,
+      amountPaid: amount,
+      change: 0,
+      notes: payload.notes ?? null,
+      status: "completed",
+      requestId: payload.requestId,
+      operationId,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: now,
+      reversalReason: null,
+      reversedTransactionId: null,
+      createdBy: "owner",
+    });
+
+    // 3. Finance journal
     writeJournalEntry(tx, {
       ownerId, clubId,
       entryType: "debt_payment",
@@ -74,9 +110,10 @@ export const debt_recordPayment = onCall(async (request) => {
     });
 
     await markOperationComplete(tx, operationId, idempotencyPath, {
-      debtId, paidAmount: newPaidAmount, remainingAmount: newRemainingAmount, status: newStatus,
+      debtId, transactionId: txRef.id,
+      paidAmount: newPaidAmount, remainingAmount: newRemainingAmount, status: newStatus,
     });
   });
 
-  return { debtId, paidAmount: newPaidAmount, remainingAmount: newRemainingAmount, status: newStatus };
+  return { debtId, transactionId: txRef.id, paidAmount: newPaidAmount, remainingAmount: newRemainingAmount, status: newStatus };
 });

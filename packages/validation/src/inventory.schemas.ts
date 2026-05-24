@@ -13,10 +13,28 @@ const priceTiersSchema = z.object({
   spv: z.number().min(0),
 });
 
+// ── Takaran (serving size) ────────────────────────────────────────────────────
+
+/**
+ * One serving-size option for a catalog product.
+ * e.g. { name: "scoop", amount: 12.5 }  →  1 scoop = 12.5 g (or ml)
+ */
+export const takaranSchema = z.object({
+  name: z.string().min(1).max(20),    // "scoop", "sajian", "sendok", …
+  amount: z.number().min(0.001),      // in baseUnit (g or ml)
+});
+
+export type Takaran = z.infer<typeof takaranSchema>;
+
 export const createProductCatalogSchema = z.object({
   name: z.string().min(1).max(100),
   category: z.enum(PRODUCT_CATEGORIES),
   prices: priceTiersSchema,
+  // Serving / takaran data (optional — products without it use package-level stock)
+  netWeight: z.number().min(0.001).nullish(),          // total grams/ml per package, e.g. 550
+  baseUnit: z.enum(["g", "ml"]).nullish(),             // unit for stock tracking at club level
+  servingsPerContainer: z.number().min(1).nullish(),   // e.g. 22
+  takaran: z.array(takaranSchema).nullish(),           // [{name:"scoop",amount:12.5},…]
 });
 
 export const updateProductCatalogSchema = z.object({
@@ -24,6 +42,10 @@ export const updateProductCatalogSchema = z.object({
   name: z.string().min(1).max(100).nullish(),
   category: z.enum(PRODUCT_CATEGORIES).nullish(),
   prices: priceTiersSchema.nullish(),
+  netWeight: z.number().min(0.001).nullish(),
+  baseUnit: z.enum(["g", "ml"]).nullish(),
+  servingsPerContainer: z.number().min(1).nullish(),
+  takaran: z.array(takaranSchema).nullish(),
 });
 
 export const addFromCatalogSchema = tenantRefSchema.extend({

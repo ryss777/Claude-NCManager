@@ -169,46 +169,6 @@ async function seed() {
 
   console.log(`✅ Firestore: membership plans (silver, gold)`);
 
-  // 7. Contoh produk di gudang owner (bukan stok club)
-  //    Stok club hanya terisi lewat Transfer Produk dari gudang owner ke club.
-  const now7 = new Date().toISOString();
-  const products = [
-    {
-      id: "item-001", name: "Protein Shake Vanilla", unit: "botol",
-      category: "Inner Nutrition", currentStock: 50, minimumStock: 5,
-      prices: { retail: 553198, ds: 427125, sc: 376695, sbQp: 341394, spv: 301050 },
-    },
-    {
-      id: "item-002", name: "Protein Shake Coklat", unit: "botol",
-      category: "Inner Nutrition", currentStock: 30, minimumStock: 5,
-      prices: { retail: 553198, ds: 427125, sc: 376695, sbQp: 341394, spv: 301050 },
-    },
-    {
-      id: "item-003", name: "Energy Bar", unit: "pcs",
-      category: "Accessories", currentStock: 100, minimumStock: 10,
-      prices: { retail: 15000, ds: 15000, sc: 15000, sbQp: 15000, spv: 15000 },
-    },
-  ];
-
-  for (const p of products) {
-    await db
-      .doc(`owners/${OWNER_UID}/inventoryItems/${p.id}`)
-      .set({
-        id: p.id,
-        ownerId: OWNER_UID,
-        name: p.name,
-        unit: p.unit,
-        category: p.category,
-        prices: p.prices,
-        currentStock: p.currentStock,
-        minimumStock: p.minimumStock,
-        isActive: true,
-        createdAt: now7,
-        updatedAt: now7,
-      });
-  }
-
-  console.log(`✅ Firestore: ${products.length} inventory items (gudang owner)`);
 
   console.log(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -224,7 +224,12 @@ export default function MembershipScreen() {
       `${action} Membership`,
       `${selectedCustomer.displayName}\nPaket: ${selectedPlan.name}\nHarga: Rp ${fmt(selectedPlan.price)}`,
       [
-        { text: "Batal", style: "cancel" },
+        {
+          text: "Batal",
+          style: "cancel",
+          onPress: () =>
+            Alert.alert("Dibatalkan", `${action} membership ${selectedCustomer.displayName} dibatalkan.`),
+        },
         {
           text: action,
           onPress: async () => {

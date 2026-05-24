@@ -43,6 +43,7 @@ export const club_createRecipe = onCall(async (request) => {
     linkedProductId: payload.linkedProductId ?? null,
     linkedProductName: payload.linkedProductName ?? null,
     ingredients: payload.ingredients,
+    prices: payload.prices ?? null,
     isActive: true,
     createdAt: now,
     updatedAt: now,
@@ -84,6 +85,7 @@ export const club_updateRecipe = onCall(async (request) => {
   if (payload.linkedProductId !== undefined) updates["linkedProductId"] = payload.linkedProductId ?? null;
   if (payload.linkedProductName !== undefined) updates["linkedProductName"] = payload.linkedProductName ?? null;
   if (payload.ingredients !== undefined && payload.ingredients !== null) updates["ingredients"] = payload.ingredients;
+  if (payload.prices !== undefined) updates["prices"] = payload.prices ?? null;
 
   await ref.update(updates);
   return { recipeId };
