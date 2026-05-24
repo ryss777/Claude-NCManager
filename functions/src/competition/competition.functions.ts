@@ -1,6 +1,6 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import type { DocumentReference, DocumentData } from "firebase-admin/firestore";
-import { db, FieldValue } from "../utils/admin";
+import { db } from "../utils/admin";
 import { validatePayload, requireRole } from "../utils/validate";
 import { checkIdempotency, throwIfDuplicate, markOperationComplete } from "../utils/idempotency";
 import {
@@ -128,12 +128,15 @@ export const competition_addParticipant = onCall(async (request) => {
 
   let displayName = guestName?.trim() ?? "";
   let customerRef: DocumentReference<DocumentData> | null = null;
+  let existingCompetitionIds: string[] = [];
 
   if (type === "customer" && customerId) {
     customerRef = db.collection(COLLECTIONS.CUSTOMERS(ownerId, clubId)).doc(customerId);
     const custSnap = await customerRef.get();
     if (!custSnap.exists) throw new HttpsError("not-found", "Pelanggan tidak ditemukan");
-    displayName = (custSnap.data()!["displayName"] as string) ?? customerId;
+    const custData = custSnap.data()!;
+    displayName = (custData["displayName"] as string) ?? customerId;
+    existingCompetitionIds = (custData["competitionIds"] as string[]) ?? [];
 
     // Duplicate check
     const dupSnap = await db
@@ -147,6 +150,7 @@ export const competition_addParticipant = onCall(async (request) => {
   }
 
   const now = new Date().toISOString();
+  const currentCount = (compSnap.data()!["participantCount"] as number) ?? 0;
   const participantRef = db
     .collection(COLLECTIONS.COMPETITION_PARTICIPANTS(ownerId, clubId, competitionId))
     .doc();
@@ -155,22 +159,28 @@ export const competition_addParticipant = onCall(async (request) => {
     tx.set(participantRef, {
       competitionId,
       type,
-      customerId:   type === "customer" ? customerId : null,
+      customerId:  type === "customer" ? customerId : null,
       displayName,
       joinedAt: now,
     });
-    // Increment participant count
+
+    // Manual increment — avoids FieldValue.increment which has emulator quirks
     tx.update(compRef, {
-      participantCount: FieldValue.increment(1),
+      participantCount: currentCount + 1,
       updatedAt: now,
     });
+
     // Denormalize competition ID onto customer for quick badge lookup
     if (customerRef) {
+      const updatedIds = existingCompetitionIds.includes(competitionId)
+        ? existingCompetitionIds
+        : [...existingCompetitionIds, competitionId];
       tx.update(customerRef, {
-        competitionIds: FieldValue.arrayUnion(competitionId),
+        competitionIds: updatedIds,
         updatedAt: now,
       });
     }
+
     await markOperationComplete(tx, operationId, idempotencyPath, { participantId: participantRef.id });
   });
 
@@ -202,24 +212,40 @@ export const competition_removeParticipant = onCall(async (request) => {
   if (!partSnap.exists) throw new HttpsError("not-found", "Peserta tidak ditemukan");
 
   const participant = partSnap.data()!;
+  const currentCount = (compSnap.data()!["participantCount"] as number) ?? 0;
   const now = new Date().toISOString();
+
+  let customerRef: DocumentReference<DocumentData> | null = null;
+  let existingCompetitionIds: string[] = [];
+
+  if (participant["type"] === "customer" && participant["customerId"]) {
+    customerRef = db
+      .collection(COLLECTIONS.CUSTOMERS(ownerId, clubId))
+      .doc(participant["customerId"] as string);
+    const custSnap = await customerRef.get();
+    if (custSnap.exists) {
+      existingCompetitionIds = (custSnap.data()!["competitionIds"] as string[]) ?? [];
+    }
+  }
 
   await db.runTransaction(async (tx) => {
     tx.delete(participantRef);
+
+    // Manual decrement — avoids FieldValue.increment which has emulator quirks
     tx.update(compRef, {
-      participantCount: FieldValue.increment(-1),
+      participantCount: Math.max(0, currentCount - 1),
       updatedAt: now,
     });
-    // Remove competition ID from customer document if applicable
-    if (participant["type"] === "customer" && participant["customerId"]) {
-      const customerRef = db
-        .collection(COLLECTIONS.CUSTOMERS(ownerId, clubId))
-        .doc(participant["customerId"] as string);
+
+    // Remove competition ID from customer's list
+    if (customerRef) {
+      const updatedIds = existingCompetitionIds.filter((id) => id !== competitionId);
       tx.update(customerRef, {
-        competitionIds: FieldValue.arrayRemove(competitionId),
+        competitionIds: updatedIds,
         updatedAt: now,
       });
     }
+
     await markOperationComplete(tx, operationId, idempotencyPath, { ok: true });
   });
 
