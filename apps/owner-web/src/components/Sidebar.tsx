@@ -13,6 +13,7 @@ const NAV = [
   { href: "/club",      label: "Manajemen Club", icon: "🏋️" },
   { href: "/operators", label: "Tim & Perangkat", icon: "👤" },
   { href: "/transactions", label: "Keuangan", icon: "💳" },
+  { href: "/lomba", label: "Lomba", icon: "🏆" },
   { href: "/reports", label: "Laporan", icon: "📊" },
   { href: "/settings", label: "Pengaturan", icon: "⚙️" },
 ];
