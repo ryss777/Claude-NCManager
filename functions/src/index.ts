@@ -36,6 +36,9 @@ export * from "./customer/customer.functions";
 // Debt Engine
 export * from "./debt/debt.functions";
 
+// Competition Engine
+export * from "./competition/competition.functions";
+
 // Sync Engine
 export * from "./sync/sync.functions";
 

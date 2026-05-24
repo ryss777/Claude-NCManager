@@ -47,4 +47,8 @@ export const COLLECTIONS = {
     `owners/${ownerId}/clubs/${clubId}/debts`,
   RECIPES: (ownerId: string, clubId: string) =>
     `owners/${ownerId}/clubs/${clubId}/recipes`,
+  COMPETITIONS: (ownerId: string, clubId: string) =>
+    `owners/${ownerId}/clubs/${clubId}/competitions`,
+  COMPETITION_PARTICIPANTS: (ownerId: string, clubId: string, competitionId: string) =>
+    `owners/${ownerId}/clubs/${clubId}/competitions/${competitionId}/participants`,
 } as const;

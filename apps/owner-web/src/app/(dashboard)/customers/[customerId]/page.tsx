@@ -47,6 +47,7 @@ interface Customer {
   notes: string | null;
   tier: CustomerTier;
   activeMembershipId: string | null;
+  competitionIds?: string[];  // denormalized — set by Cloud Functions when joining/leaving a competition
   createdAt: string;
   updatedAt: string;
 }
@@ -545,6 +546,11 @@ export default function CustomerDetailPage() {
               <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${TIER_BADGE[tier] ?? "bg-slate-100 text-slate-700"}`}>
                 {TIER_LABELS[tier] ?? tier}
               </span>
+              {customer.competitionIds && customer.competitionIds.length > 0 && (
+                <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                  🏆 Peserta Lomba
+                </span>
+              )}
             </div>
             <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5">
               {customer.phone && <span className="text-sm text-slate-500">📞 {customer.phone}</span>}

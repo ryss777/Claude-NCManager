@@ -9,3 +9,4 @@ export * from "./customer.schemas";
 export * from "./transfer.schemas";
 export * from "./debt.schemas";
 export * from "./recipe.schemas";
+export * from "./competition.schemas";
