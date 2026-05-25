@@ -1,5 +1,5 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import type { DocumentReference, DocumentData } from "firebase-admin/firestore";
+import type { DocumentReference, DocumentData, Transaction } from "firebase-admin/firestore";
 import { db } from "../utils/admin";
 import { validatePayload, requireRole } from "../utils/validate";
 import { checkIdempotency, throwIfDuplicate, markOperationComplete } from "../utils/idempotency";
@@ -8,16 +8,40 @@ import {
   extendCompetitionSchema,
   addParticipantSchema,
   removeParticipantSchema,
+  recordPaymentSchema,
+  recordMeasurementSchema,
+  forceStartSchema,
+  forceEndSchema,
+  updateScoringWeightsSchema,
+  DEFAULT_SCORING_WEIGHTS,
 } from "@nc-manager/validation";
 import { COLLECTIONS } from "@nc-manager/shared-constants";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function writeLog(
+  tx: Transaction,
+  logCollPath: string,
+  entry: Record<string, unknown>,
+  now: string
+): void {
+  const logRef = db.collection(logCollPath).doc();
+  tx.set(logRef, { ...entry, createdAt: now });
+}
 
 function computeStatus(startDate: string, endDate: string): "upcoming" | "active" | "finished" {
   const today = new Date().toISOString().slice(0, 10);
   if (today < startDate) return "upcoming";
   if (today > endDate) return "finished";
   return "active";
+}
+
+// Trust stored "finished" status — date-only compute returns "active" when
+// endDate === today (case after force-end), which would let forceEnd/forceStart
+// run again on an already-finished competition.
+function effectiveStatus(comp: Record<string, unknown>): "upcoming" | "active" | "finished" {
+  if (comp["status"] === "finished") return "finished";
+  return computeStatus(comp["startDate"] as string, comp["endDate"] as string);
 }
 
 // ── competition_create ────────────────────────────────────────────────────────
@@ -28,7 +52,7 @@ export const competition_create = onCall(async (request) => {
   requireRole(request, "owner");
 
   const payload = validatePayload(createCompetitionSchema, request.data);
-  const { ownerId, clubId, operationId, name, startDate, endDate, adminFee } = payload;
+  const { ownerId, clubId, operationId, name, startDate, endDate, adminFee, scoringWeights } = payload;
 
   if (endDate < startDate) {
     throw new HttpsError("invalid-argument", "Tanggal selesai tidak boleh sebelum tanggal mulai");
@@ -44,13 +68,14 @@ export const competition_create = onCall(async (request) => {
   await db.runTransaction(async (tx) => {
     tx.set(compRef, {
       name,
-      adminFee: adminFee ?? 0,
+      adminFee:       adminFee ?? 0,
       startDate,
       endDate,
-      status: computeStatus(startDate, endDate),
+      status:         computeStatus(startDate, endDate),
       participantCount: 0,
-      createdAt: now,
-      updatedAt: now,
+      scoringWeights: scoringWeights ?? DEFAULT_SCORING_WEIGHTS,
+      createdAt:      now,
+      updatedAt:      now,
     });
     await markOperationComplete(tx, operationId, idempotencyPath, { competitionId: compRef.id });
   });
@@ -78,6 +103,10 @@ export const competition_extend = onCall(async (request) => {
 
   const comp = compSnap.data()!;
   const currentEndDate = comp["endDate"] as string;
+
+  if (effectiveStatus(comp) === "finished") {
+    throw new HttpsError("failed-precondition", "Lomba sudah selesai, tidak bisa diperpanjang");
+  }
 
   if (newEndDate <= currentEndDate) {
     throw new HttpsError(
@@ -126,6 +155,10 @@ export const competition_addParticipant = onCall(async (request) => {
   const compSnap = await compRef.get();
   if (!compSnap.exists) throw new HttpsError("not-found", "Lomba tidak ditemukan");
 
+  if (effectiveStatus(compSnap.data()!) === "finished") {
+    throw new HttpsError("failed-precondition", "Lomba sudah selesai, tidak bisa menambah peserta");
+  }
+
   let displayName = guestName?.trim() ?? "";
   let customerRef: DocumentReference<DocumentData> | null = null;
   let existingCompetitionIds: string[] = [];
@@ -154,6 +187,7 @@ export const competition_addParticipant = onCall(async (request) => {
   const participantRef = db
     .collection(COLLECTIONS.COMPETITION_PARTICIPANTS(ownerId, clubId, competitionId))
     .doc();
+  const logCollPath = COLLECTIONS.COMPETITION_ACTIVITY_LOG(ownerId, clubId, competitionId);
 
   await db.runTransaction(async (tx) => {
     tx.set(participantRef, {
@@ -161,6 +195,8 @@ export const competition_addParticipant = onCall(async (request) => {
       type,
       customerId:  type === "customer" ? customerId : null,
       displayName,
+      amountPaid:       0,
+      measurementCount: 0,
       joinedAt: now,
     });
 
@@ -181,6 +217,13 @@ export const competition_addParticipant = onCall(async (request) => {
       });
     }
 
+    writeLog(tx, logCollPath, {
+      type:            "participant_added",
+      participantId:   participantRef.id,
+      participantName: displayName,
+      participantType: type,
+    }, now);
+
     await markOperationComplete(tx, operationId, idempotencyPath, { participantId: participantRef.id });
   });
 
@@ -196,7 +239,7 @@ export const competition_removeParticipant = onCall(async (request) => {
   requireRole(request, "owner");
 
   const payload = validatePayload(removeParticipantSchema, request.data);
-  const { ownerId, clubId, operationId, competitionId, participantId } = payload;
+  const { ownerId, clubId, operationId, competitionId, participantId, reason } = payload;
 
   const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
   const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
@@ -210,6 +253,10 @@ export const competition_removeParticipant = onCall(async (request) => {
   const [compSnap, partSnap] = await Promise.all([compRef.get(), participantRef.get()]);
   if (!compSnap.exists) throw new HttpsError("not-found", "Lomba tidak ditemukan");
   if (!partSnap.exists) throw new HttpsError("not-found", "Peserta tidak ditemukan");
+
+  if (effectiveStatus(compSnap.data()!) === "finished") {
+    throw new HttpsError("failed-precondition", "Lomba sudah selesai, tidak bisa menghapus peserta");
+  }
 
   const participant = partSnap.data()!;
   const currentCount = (compSnap.data()!["participantCount"] as number) ?? 0;
@@ -227,6 +274,8 @@ export const competition_removeParticipant = onCall(async (request) => {
       existingCompetitionIds = (custSnap.data()!["competitionIds"] as string[]) ?? [];
     }
   }
+
+  const logCollPath = COLLECTIONS.COMPETITION_ACTIVITY_LOG(ownerId, clubId, competitionId);
 
   await db.runTransaction(async (tx) => {
     tx.delete(participantRef);
@@ -246,6 +295,265 @@ export const competition_removeParticipant = onCall(async (request) => {
       });
     }
 
+    writeLog(tx, logCollPath, {
+      type:            "participant_removed",
+      participantId,
+      participantName: participant["displayName"] as string,
+      reason,
+    }, now);
+
+    await markOperationComplete(tx, operationId, idempotencyPath, { ok: true });
+  });
+
+  return { ok: true };
+});
+
+// ── competition_recordPayment ─────────────────────────────────────────────────
+//
+// Records a (partial or full) admin-fee payment for a participant.
+// Accumulates on top of any previously recorded amount; rejects over-payment.
+
+export const competition_recordPayment = onCall(async (request) => {
+  requireRole(request, "owner");
+
+  const payload = validatePayload(recordPaymentSchema, request.data);
+  const { ownerId, clubId, operationId, competitionId, participantId, amount } = payload;
+
+  const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
+  const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
+  throwIfDuplicate(isDuplicate, operationId);
+
+  const compRef = db.collection(COLLECTIONS.COMPETITIONS(ownerId, clubId)).doc(competitionId);
+  const partRef = db
+    .collection(COLLECTIONS.COMPETITION_PARTICIPANTS(ownerId, clubId, competitionId))
+    .doc(participantId);
+
+  const [compSnap, partSnap] = await Promise.all([compRef.get(), partRef.get()]);
+  if (!compSnap.exists) throw new HttpsError("not-found", "Lomba tidak ditemukan");
+  if (!partSnap.exists) throw new HttpsError("not-found", "Peserta tidak ditemukan");
+
+  if (effectiveStatus(compSnap.data()!) === "finished") {
+    throw new HttpsError("failed-precondition", "Lomba sudah selesai, tidak bisa mencatat pembayaran baru");
+  }
+
+  const adminFee     = (compSnap.data()!["adminFee"] as number) ?? 0;
+  const currentPaid  = (partSnap.data()!["amountPaid"] as number) ?? 0;
+  const newPaid      = currentPaid + amount;
+
+  if (newPaid > adminFee) {
+    const remaining = adminFee - currentPaid;
+    throw new HttpsError(
+      "invalid-argument",
+      `Jumlah melebihi sisa tagihan. Sisa: Rp ${remaining.toLocaleString("id-ID")}`
+    );
+  }
+
+  const now = new Date().toISOString();
+  const logCollPath = COLLECTIONS.COMPETITION_ACTIVITY_LOG(ownerId, clubId, competitionId);
+
+  await db.runTransaction(async (tx) => {
+    tx.update(partRef, { amountPaid: newPaid, updatedAt: now });
+
+    writeLog(tx, logCollPath, {
+      type:            "payment_recorded",
+      participantId,
+      participantName: partSnap.data()!["displayName"] as string,
+      amount,
+      totalPaid:       newPaid,
+      adminFee,
+    }, now);
+
+    await markOperationComplete(tx, operationId, idempotencyPath, { newAmountPaid: newPaid });
+  });
+
+  return { newAmountPaid: newPaid };
+});
+
+// ── competition_recordMeasurement ─────────────────────────────────────────────
+//
+// Saves one body-measurement round for a participant (initial or follow-up).
+// Required: weightKg, bodyFatPct, abdominalFatPct.
+// Optional: boneMassKg, metabolicAge, muscleMassKg, waterPct.
+
+export const competition_recordMeasurement = onCall(async (request) => {
+  requireRole(request, "owner");
+
+  const payload = validatePayload(recordMeasurementSchema, request.data);
+  const {
+    ownerId, clubId, operationId, competitionId, participantId,
+    weightKg, bodyFatPct, abdominalFatPct,
+    boneMassKg, metabolicAge, muscleMassKg, waterPct,
+  } = payload;
+
+  const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
+  const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
+  throwIfDuplicate(isDuplicate, operationId);
+
+  // Verify participant exists
+  const partRef = db
+    .collection(COLLECTIONS.COMPETITION_PARTICIPANTS(ownerId, clubId, competitionId))
+    .doc(participantId);
+  const partSnap = await partRef.get();
+  if (!partSnap.exists) throw new HttpsError("not-found", "Peserta tidak ditemukan");
+
+  const currentMeasurementCount = (partSnap.data()!["measurementCount"] as number) ?? 0;
+
+  const now = new Date().toISOString();
+  const measurementRef = db
+    .collection(COLLECTIONS.COMPETITION_PARTICIPANT_MEASUREMENTS(ownerId, clubId, competitionId, participantId))
+    .doc();
+
+  const data: Record<string, unknown> = {
+    weightKg,
+    bodyFatPct,
+    abdominalFatPct,
+    recordedAt: now,
+    createdAt:  now,
+  };
+  if (boneMassKg   !== undefined) data["boneMassKg"]   = boneMassKg;
+  if (metabolicAge !== undefined) data["metabolicAge"] = metabolicAge;
+  if (muscleMassKg !== undefined) data["muscleMassKg"] = muscleMassKg;
+  if (waterPct     !== undefined) data["waterPct"]     = waterPct;
+
+  await db.runTransaction(async (tx) => {
+    tx.set(measurementRef, data);
+    tx.update(partRef, { measurementCount: currentMeasurementCount + 1, updatedAt: now });
+    await markOperationComplete(tx, operationId, idempotencyPath, { measurementId: measurementRef.id });
+  });
+
+  return { measurementId: measurementRef.id };
+});
+
+// ── competition_forceStart ────────────────────────────────────────────────────
+//
+// Allows the owner to start a competition before its scheduled startDate.
+// Only valid for "upcoming" competitions. The endDate is never changed —
+// the competition still finishes on the originally planned date.
+
+export const competition_forceStart = onCall(async (request) => {
+  requireRole(request, "owner");
+
+  const payload = validatePayload(forceStartSchema, request.data);
+  const { ownerId, clubId, operationId, competitionId, newEndDate } = payload;
+
+  const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
+  const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
+  throwIfDuplicate(isDuplicate, operationId);
+
+  const compRef = db.collection(COLLECTIONS.COMPETITIONS(ownerId, clubId)).doc(competitionId);
+  const compSnap = await compRef.get();
+  if (!compSnap.exists) throw new HttpsError("not-found", "Lomba tidak ditemukan");
+
+  const comp = compSnap.data()!;
+  const today = new Date().toISOString().slice(0, 10);
+  const currentStatus = effectiveStatus(comp);
+
+  if (currentStatus === "active") {
+    throw new HttpsError("failed-precondition", "Lomba sudah berjalan");
+  }
+  if (currentStatus === "finished") {
+    throw new HttpsError("failed-precondition", "Lomba sudah selesai");
+  }
+
+  const effectiveEndDate = newEndDate ?? (comp["endDate"] as string);
+
+  if (effectiveEndDate <= today) {
+    throw new HttpsError("invalid-argument", "Tanggal selesai harus setelah hari ini");
+  }
+
+  const now = new Date().toISOString();
+  const logCollPath = COLLECTIONS.COMPETITION_ACTIVITY_LOG(ownerId, clubId, competitionId);
+
+  await db.runTransaction(async (tx) => {
+    tx.update(compRef, {
+      startDate: today,
+      endDate:   effectiveEndDate,
+      status:    "active",
+      updatedAt: now,
+    });
+    writeLog(tx, logCollPath, {
+      type:              "competition_started",
+      originalStartDate: comp["startDate"] as string,
+      originalEndDate:   comp["endDate"] as string,
+      startedEarlyAt:    today,
+      endDate:           effectiveEndDate,
+    }, now);
+    await markOperationComplete(tx, operationId, idempotencyPath, { ok: true });
+  });
+
+  return { ok: true };
+});
+
+// ── competition_forceEnd ──────────────────────────────────────────────────────
+//
+// Allows the owner to manually end an active competition before its endDate.
+// Sets endDate = today and status = "finished".
+
+export const competition_forceEnd = onCall(async (request) => {
+  requireRole(request, "owner");
+
+  const payload = validatePayload(forceEndSchema, request.data);
+  const { ownerId, clubId, operationId, competitionId } = payload;
+
+  const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
+  const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
+  throwIfDuplicate(isDuplicate, operationId);
+
+  const compRef = db.collection(COLLECTIONS.COMPETITIONS(ownerId, clubId)).doc(competitionId);
+  const compSnap = await compRef.get();
+  if (!compSnap.exists) throw new HttpsError("not-found", "Lomba tidak ditemukan");
+
+  const comp = compSnap.data()!;
+  const today = new Date().toISOString().slice(0, 10);
+  const currentStatus = effectiveStatus(comp);
+
+  if (currentStatus !== "active") {
+    throw new HttpsError("failed-precondition", "Hanya lomba yang sedang berjalan yang bisa diselesaikan lebih awal");
+  }
+
+  const now = new Date().toISOString();
+  const logCollPath = COLLECTIONS.COMPETITION_ACTIVITY_LOG(ownerId, clubId, competitionId);
+
+  await db.runTransaction(async (tx) => {
+    tx.update(compRef, {
+      endDate:   today,
+      status:    "finished",
+      updatedAt: now,
+    });
+    writeLog(tx, logCollPath, {
+      type:            "competition_ended",
+      endedEarlyAt:    today,
+      originalEndDate: comp["endDate"] as string,
+    }, now);
+    await markOperationComplete(tx, operationId, idempotencyPath, { ok: true });
+  });
+
+  return { ok: true };
+});
+
+// ── competition_updateScoringWeights ──────────────────────────────────────────
+//
+// Allows the owner to correct the scoring weights at any time (no status lock).
+// bodyFat + abdominalFat + weightPct must equal 100.
+
+export const competition_updateScoringWeights = onCall(async (request) => {
+  requireRole(request, "owner");
+
+  const payload = validatePayload(updateScoringWeightsSchema, request.data);
+  const { ownerId, clubId, operationId, competitionId, scoringWeights } = payload;
+
+  const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
+  const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
+  throwIfDuplicate(isDuplicate, operationId);
+
+  const compRef = db.collection(COLLECTIONS.COMPETITIONS(ownerId, clubId)).doc(competitionId);
+  const compSnap = await compRef.get();
+  if (!compSnap.exists) throw new HttpsError("not-found", "Lomba tidak ditemukan");
+
+  const now = new Date().toISOString();
+
+  await db.runTransaction(async (tx) => {
+    tx.update(compRef, { scoringWeights, updatedAt: now });
     await markOperationComplete(tx, operationId, idempotencyPath, { ok: true });
   });
 

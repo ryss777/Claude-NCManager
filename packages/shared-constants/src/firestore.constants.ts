@@ -51,4 +51,9 @@ export const COLLECTIONS = {
     `owners/${ownerId}/clubs/${clubId}/competitions`,
   COMPETITION_PARTICIPANTS: (ownerId: string, clubId: string, competitionId: string) =>
     `owners/${ownerId}/clubs/${clubId}/competitions/${competitionId}/participants`,
+  COMPETITION_ACTIVITY_LOG: (ownerId: string, clubId: string, competitionId: string) =>
+    `owners/${ownerId}/clubs/${clubId}/competitions/${competitionId}/activityLog`,
+  COMPETITION_PARTICIPANT_MEASUREMENTS: (
+    ownerId: string, clubId: string, competitionId: string, participantId: string
+  ) => `owners/${ownerId}/clubs/${clubId}/competitions/${competitionId}/participants/${participantId}/measurements`,
 } as const;

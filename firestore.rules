@@ -233,6 +233,16 @@ service cloud.firestore {
             allow create: if false; // Cloud Function only
             allow update: if false; // immutable
             allow delete: if false; // Cloud Function only
+
+            match /measurements/{measurementId} {
+              allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+              allow write: if false; // Cloud Function only
+            }
+          }
+
+          match /activityLog/{logId} {
+            allow read: if isOwnerOf(ownerId) || isOperatorOf(ownerId, clubId);
+            allow write: if false; // Cloud Function only
           }
         }
 
