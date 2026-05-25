@@ -184,8 +184,12 @@ export const pos_completeTransaction = onCall(async (request) => {
   const recipeMap = await loadRecipesForItems(ownerId, clubId, txItems);
   const ingredientDeductions = buildIngredientDeductions(txItems, recipeMap);
 
+  const membershipRef = membershipId
+    ? db.collection(COLLECTIONS.MEMBERSHIPS(ownerId, clubId)).doc(membershipId)
+    : null;
+
   await db.runTransaction(async (tx) => {
-    // Pre-read inventory items before any writes (club stock for operator POS)
+    // ── Read phase — Firestore requires ALL reads before ANY writes ────────────
     const invSnaps = await readInventorySnaps(
       tx,
       COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId),
@@ -194,6 +198,14 @@ export const pos_completeTransaction = onCall(async (request) => {
     const ingSnaps = ingredientDeductions.length > 0
       ? await readIngredientSnaps(tx, ownerId, clubId, ingredientDeductions)
       : [];
+    const shiftSnap = await tx.get(shiftRef);
+    const membershipSnap = membershipRef ? await tx.get(membershipRef) : null;
+
+    const shift = shiftSnap.data() ?? {};
+    const currentTxCount   = (shift["totalTransactions"] as number | undefined) ?? 0;
+    const currentTxRevenue = (shift["totalRevenue"] as number | undefined) ?? 0;
+
+    // ── Write phase ────────────────────────────────────────────────────────────
 
     // 1. Update transaction status
     tx.update(txRef, {
@@ -222,43 +234,36 @@ export const pos_completeTransaction = onCall(async (request) => {
 
     // 3. Update shift totals
     tx.update(shiftRef, {
-      totalTransactions: (await shiftRef.get()).data()!["totalTransactions"] as number + 1,
-      totalRevenue: (await shiftRef.get()).data()!["totalRevenue"] as number + total,
+      totalTransactions: currentTxCount + 1,
+      totalRevenue: currentTxRevenue + total,
     });
 
     // 4. Deduct membership visit (if applicable)
-    if (membershipId) {
-      const membershipRef = db
-        .collection(COLLECTIONS.MEMBERSHIPS(ownerId, clubId))
-        .doc(membershipId);
-      const membershipSnap = await membershipRef.get();
+    if (membershipRef && membershipSnap?.exists) {
+      const membership = membershipSnap.data()!;
+      const visitRemaining = membership["visitRemaining"] as number;
 
-      if (membershipSnap.exists) {
-        const membership = membershipSnap.data()!;
-        const visitRemaining = membership["visitRemaining"] as number;
+      if (visitRemaining > 0) {
+        const visitRef = db.collection(COLLECTIONS.MEMBERSHIP_VISITS(ownerId, clubId)).doc();
+        tx.set(visitRef, {
+          id: visitRef.id,
+          ownerId,
+          clubId,
+          membershipId,
+          customerId: txData["customerId"] as string,
+          transactionId,
+          visitsBefore: visitRemaining,
+          visitsAfter: visitRemaining - 1,
+          requestId: txData["requestId"] as string,
+          operationId: `visit_${transactionId}`,
+          createdAt: now,
+        });
 
-        if (visitRemaining > 0) {
-          const visitRef = db.collection(COLLECTIONS.MEMBERSHIP_VISITS(ownerId, clubId)).doc();
-          tx.set(visitRef, {
-            id: visitRef.id,
-            ownerId,
-            clubId,
-            membershipId,
-            customerId: txData["customerId"] as string,
-            transactionId,
-            visitsBefore: visitRemaining,
-            visitsAfter: visitRemaining - 1,
-            requestId: txData["requestId"] as string,
-            operationId: `visit_${transactionId}`,
-            createdAt: now,
-          });
-
-          tx.update(membershipRef, {
-            visitUsed: membership["visitUsed"] as number + 1,
-            visitRemaining: visitRemaining - 1,
-            updatedAt: now,
-          });
-        }
+        tx.update(membershipRef, {
+          visitUsed: membership["visitUsed"] as number + 1,
+          visitRemaining: visitRemaining - 1,
+          updatedAt: now,
+        });
       }
     }
 
@@ -347,8 +352,12 @@ export const pos_reverseTransaction = onCall(async (request) => {
   const recipeMap = await loadRecipesForItems(ownerId, clubId, txItems);
   const ingredientDeductions = buildIngredientDeductions(txItems, recipeMap);
 
+  const membershipRef = membershipId
+    ? db.collection(COLLECTIONS.MEMBERSHIPS(ownerId, clubId)).doc(membershipId)
+    : null;
+
   await db.runTransaction(async (tx) => {
-    // Pre-read inventory items before any writes (club stock for reversal)
+    // ── Read phase — Firestore requires ALL reads before ANY writes ────────────
     const invSnaps = await readInventorySnaps(
       tx,
       COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId),
@@ -357,6 +366,14 @@ export const pos_reverseTransaction = onCall(async (request) => {
     const ingSnaps = ingredientDeductions.length > 0
       ? await readIngredientSnaps(tx, ownerId, clubId, ingredientDeductions)
       : [];
+    const shiftSnap = await tx.get(shiftRef);
+    const membershipSnap = membershipRef ? await tx.get(membershipRef) : null;
+
+    const shift = shiftSnap.data() ?? {};
+    const currentTxCount   = (shift["totalTransactions"] as number | undefined) ?? 0;
+    const currentTxRevenue = (shift["totalRevenue"] as number | undefined) ?? 0;
+
+    // ── Write phase ────────────────────────────────────────────────────────────
 
     // 1. Mark original transaction as reversed
     tx.update(txRef, {
@@ -383,25 +400,18 @@ export const pos_reverseTransaction = onCall(async (request) => {
 
     // 3. Reverse shift totals
     tx.update(shiftRef, {
-      totalTransactions: (await shiftRef.get()).data()!["totalTransactions"] as number - 1,
-      totalRevenue: (await shiftRef.get()).data()!["totalRevenue"] as number - total,
+      totalTransactions: Math.max(0, currentTxCount - 1),
+      totalRevenue: currentTxRevenue - total,
     });
 
     // 4. Restore membership visit (if applicable)
-    if (membershipId) {
-      const membershipRef = db
-        .collection(COLLECTIONS.MEMBERSHIPS(ownerId, clubId))
-        .doc(membershipId);
-      const membershipSnap = await membershipRef.get();
-
-      if (membershipSnap.exists) {
-        const membership = membershipSnap.data()!;
-        tx.update(membershipRef, {
-          visitUsed: Math.max(0, (membership["visitUsed"] as number) - 1),
-          visitRemaining: (membership["visitRemaining"] as number) + 1,
-          updatedAt: now,
-        });
-      }
+    if (membershipRef && membershipSnap?.exists) {
+      const membership = membershipSnap.data()!;
+      tx.update(membershipRef, {
+        visitUsed: Math.max(0, (membership["visitUsed"] as number) - 1),
+        visitRemaining: (membership["visitRemaining"] as number) + 1,
+        updatedAt: now,
+      });
     }
 
     // 5. Restore inventory stock (return items to shelf — club stock)
