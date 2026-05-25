@@ -35,6 +35,7 @@ interface Customer {
   email: string | null;
   tier: CustomerTier;
   activeMembershipId: string | null;
+  competitionIds?: string[];
   createdAt: string;
 }
 
@@ -557,6 +558,36 @@ export default function CustomersPage() {
   const inactivePlans = plans.filter((p) => !p.isActive);
   const activeMembershipCount = customers.filter((c) => memberships.has(c.id)).length;
 
+  // ── Export CSV ───────────────────────────────────────────────────────────────
+  function exportCsv() {
+    const rows: string[][] = [
+      ["Nama", "Tier", "No. HP", "Email", "Membership Aktif", "Bergabung"],
+      ...filtered.map((c) => {
+        const m = memberships.get(c.id);
+        return [
+          c.displayName,
+          TIER_LABELS[c.tier] ?? c.tier,
+          c.phone ?? "",
+          c.email ?? "",
+          m ? m.planName : "Tidak aktif",
+          c.createdAt?.slice(0, 10) ?? "",
+        ];
+      }),
+    ];
+    const csv = rows
+      .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `pelanggan_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4">
@@ -570,10 +601,19 @@ export default function CustomersPage() {
           </p>
         </div>
         {mainTab === "customers" && (
-          <button onClick={() => setAddOpen(true)}
-            className="flex items-center gap-2 bg-blue-600 text-white rounded-xl px-5 py-2.5 text-sm font-bold hover:bg-blue-700 transition shadow-sm">
-            <span className="text-lg leading-none">+</span> Tambah Pelanggan
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={exportCsv}
+              disabled={filtered.length === 0}
+              className="flex items-center gap-1.5 border border-slate-200 text-slate-600 rounded-xl px-4 py-2.5 text-sm font-semibold hover:bg-slate-50 disabled:opacity-40 transition"
+            >
+              ⬇ CSV
+            </button>
+            <button onClick={() => setAddOpen(true)}
+              className="flex items-center gap-2 bg-blue-600 text-white rounded-xl px-5 py-2.5 text-sm font-bold hover:bg-blue-700 transition shadow-sm">
+              <span className="text-lg leading-none">+</span> Tambah Pelanggan
+            </button>
+          </div>
         )}
         {mainTab === "membership" && (
           <button onClick={() => { resetCreate(); setCreateOpen(true); }}
@@ -725,9 +765,14 @@ export default function CustomersPage() {
                         {c.displayName.charAt(0).toUpperCase()}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
+                        <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                           <span className="font-semibold text-slate-900 text-sm truncate">{c.displayName}</span>
                           <span className={`text-xs font-bold px-2 py-0.5 rounded-full shrink-0 ${TIER_BADGE[c.tier] ?? "bg-slate-100 text-slate-600"}`}>{TIER_LABELS[c.tier] ?? c.tier}</span>
+                          {c.competitionIds && c.competitionIds.length > 0 && (
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-full shrink-0 bg-amber-100 text-amber-800">
+                              🏆 Lomba
+                            </span>
+                          )}
                         </div>
                         {mem ? (
                           <div className="flex items-center gap-2">

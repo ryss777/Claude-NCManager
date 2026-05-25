@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { signOut } from "@/firebase/firebase";
+import { useEffect, useState } from "react";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { signOut, firebaseDb } from "@/firebase/firebase";
 import { useOwnerAuthStore } from "@/store/auth.store";
 
 const NAV = [
@@ -20,8 +22,24 @@ const NAV = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
+  const router   = useRouter();
   const { displayName, email, ownerId, clubId, isAdmin } = useOwnerAuthStore();
+
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // Live unread notification count via snapshot listener — no refetch on navigate.
+  useEffect(() => {
+    if (!ownerId) return;
+    const unsub = onSnapshot(
+      query(
+        collection(firebaseDb(), `owners/${ownerId}/notifications`),
+        where("isRead", "==", false)
+      ),
+      (snap) => setUnreadCount(snap.size),
+      () => { /* ignore */ }
+    );
+    return unsub;
+  }, [ownerId]);
 
   async function handleSignOut() {
     await signOut();
@@ -37,7 +55,7 @@ export function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {NAV.map((item) => {
           const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
           return (
@@ -73,6 +91,33 @@ export function Sidebar() {
           </Link>
         </div>
       )}
+
+      {/* Notifications bell */}
+      <div className="px-3 pb-2">
+        <Link
+          href="/notifications"
+          className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition ${
+            pathname === "/notifications"
+              ? "bg-brand-50 text-brand-700"
+              : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+          }`}
+        >
+          <span className="relative text-base">
+            🔔
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-0.5 leading-none">
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
+          </span>
+          Notifikasi
+          {unreadCount > 0 && (
+            <span className="ml-auto text-xs font-bold bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full">
+              {unreadCount}
+            </span>
+          )}
+        </Link>
+      </div>
 
       {/* User */}
       <div className="px-4 py-4 border-t border-slate-100">

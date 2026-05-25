@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { doc, getDoc, getDocs, collection, query, where, limit, updateDoc } from "firebase/firestore";
-import { useParams } from "next/navigation";
+import { doc, getDoc, getDocs, collection, query, where, limit, updateDoc, documentId } from "firebase/firestore";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useOwnerAuthStore } from "@/store/auth.store";
 import { callFunction, firebaseDb } from "@/firebase/firebase";
@@ -93,6 +93,16 @@ interface Visit {
   totalCharge?: number;
 }
 
+interface CompetitionSummary {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  adminFee: number;
+  participantCount: number;
+  status?: "upcoming" | "active" | "finished";
+}
+
 interface Debt {
   id: string;
   source: string;
@@ -100,35 +110,13 @@ interface Debt {
   totalAmount: number;
   paidAmount: number;
   remainingAmount: number;
-  status: "outstanding" | "partial" | "paid";
+  status: "unpaid" | "outstanding" | "partial" | "paid";
   payments: { amount: number; paymentMethod: string; notes: string | null; paidAt: string }[];
   createdAt: string;
   updatedAt: string;
 }
 
-type Tab = "membership" | "transactions" | "visits" | "debts";
-
-type PlanTier = "basic" | "silver" | "gold" | "platinum";
-
-interface Plan {
-  id: string;
-  planType?: "regular" | "locker";
-  name: string;
-  tier: PlanTier;
-  price: number;
-  visitQuota: number;
-  hasExpiry: boolean;
-  durationDays: number | null;
-  isActive: boolean;
-  blendingFeePerSession?: number;
-}
-
-const PLAN_TIER_BADGE: Record<PlanTier, string> = {
-  basic:    "bg-slate-100 text-slate-700",
-  silver:   "bg-slate-200 text-slate-800",
-  gold:     "bg-yellow-100 text-yellow-800",
-  platinum: "bg-blue-100 text-blue-800",
-};
+type Tab = "membership" | "transactions" | "visits" | "debts" | "lomba";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -167,6 +155,7 @@ function daysLeft(iso: string | null) {
 
 export default function CustomerDetailPage() {
   const { customerId } = useParams<{ customerId: string }>();
+  const router = useRouter();
   const { ownerId, clubId } = useOwnerAuthStore();
 
   const [customer, setCustomer]         = useState<Customer | null>(null);
@@ -201,20 +190,22 @@ export default function CustomerDetailPage() {
   const [tierSaving, setTierSaving] = useState(false);
   const [tierFeedback, setTierFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
-  // Locker top-up
-  const [topUpSessions, setTopUpSessions] = useState("10");
-  const [topUpLoading, setTopUpLoading]   = useState(false);
-  const [topUpFeedback, setTopUpFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
+  // Deduct visit
+  const [deductLoading, setDeductLoading]   = useState(false);
+  const [deductFeedback, setDeductFeedback] = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
-  // Activate membership dialog
-  const [activateOpen, setActivateOpen]               = useState(false);
-  const [activatePlans, setActivatePlans]             = useState<Plan[]>([]);
-  const [activatePlansLoading, setActivatePlansLoading] = useState(false);
-  const [activateSelectedPlan, setActivateSelectedPlan] = useState<Plan | null>(null);
-  const [activateAmountPaid, setActivateAmountPaid]   = useState("");
-  const [activatePayMethod, setActivatePayMethod]     = useState<"cash" | "transfer">("cash");
-  const [activateSaving, setActivateSaving]           = useState(false);
-  const [activateFeedback, setActivateFeedback]       = useState<{ type: "ok" | "err"; msg: string } | undefined>();
+  // Upgrade plan
+  const [upgradePlans, setUpgradePlans]     = useState<{ id: string; name: string; tier: string; price: number; visitQuota: number; durationDays: number | null; hasExpiry: boolean }[]>([]);
+  const [upgradeOpen, setUpgradeOpen]       = useState(false);
+  const [upgradeNewPlanId, setUpgradeNewPlanId] = useState("");
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+  const [upgradeError, setUpgradeError]     = useState("");
+
+  // Lomba tab
+  const [compList, setCompList]           = useState<CompetitionSummary[]>([]);
+  const [compLoading, setCompLoading]     = useState(false);
+  const [compLoaded, setCompLoaded]       = useState(false);
+
 
   const activeMembership = useMemo(
     () => memberships.find((m) => m.status === "active") ?? null,
@@ -234,6 +225,31 @@ export default function CustomerDetailPage() {
   );
 
   const isLocker = activeMembership?.planType === "locker";
+
+  async function loadCompetitions(ids: string[]) {
+    if (!ownerId || !clubId || ids.length === 0) { setCompList([]); setCompLoaded(true); return; }
+    setCompLoading(true);
+    try {
+      const db = firebaseDb();
+      const coll = collection(db, `owners/${ownerId}/clubs/${clubId}/competitions`);
+      // Firestore "in" supports max 30 IDs per query — batch when needed.
+      const batches: Promise<{ id: string; data: Record<string, unknown> }[]>[] = [];
+      for (let i = 0; i < ids.length; i += 30) {
+        const chunk = ids.slice(i, i + 30);
+        batches.push(
+          getDocs(query(coll, where(documentId(), "in", chunk)))
+            .then((snap) => snap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> })))
+        );
+      }
+      const results = (await Promise.all(batches)).flat();
+      setCompList(
+        results
+          .map((r) => ({ id: r.id, ...(r.data as Omit<CompetitionSummary, "id">) }))
+          .sort((a, b) => b.startDate.localeCompare(a.startDate))
+      );
+      setCompLoaded(true);
+    } finally { setCompLoading(false); }
+  }
 
   useEffect(() => {
     if (ownerId && clubId && customerId) loadAll();
@@ -352,83 +368,63 @@ export default function CustomerDetailPage() {
     } finally { setDebtPaying(false); }
   }
 
-  async function handleLockerTopUp() {
+  async function handleDeductVisit() {
     if (!activeMembership || !ownerId || !clubId) return;
-    const sessions = parseInt(topUpSessions);
-    if (isNaN(sessions) || sessions < 1) {
-      setTopUpFeedback({ type: "err", msg: "Masukkan jumlah sesi yang valid (min 1)" });
-      return;
-    }
-    setTopUpLoading(true);
-    setTopUpFeedback(undefined);
+    setDeductLoading(true); setDeductFeedback(undefined);
     try {
-      const result = await callFunction("locker_topUp", {
+      await callFunction("membership_deductVisit", {
         ownerId, clubId,
         requestId: uuidv4(), operationId: uuidv4(),
         membershipId: activeMembership.id,
         customerId,
-        sessions,
-      }) as { creditsAfter: number };
-      setTopUpFeedback({ type: "ok", msg: `+${sessions} sesi ditambahkan. Saldo: ${result.creditsAfter} kredit` });
-      setTopUpSessions("10");
+        transactionId: uuidv4(),
+      });
+      const remaining = (activeMembership.visitRemaining ?? 0) - 1;
+      setDeductFeedback({ type: "ok", msg: `✓ Kunjungan dicatat. Sisa: ${remaining} kunjungan` });
       loadAll();
     } catch (err) {
-      setTopUpFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal top up" });
-    } finally { setTopUpLoading(false); }
+      setDeductFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal mencatat kunjungan" });
+    } finally { setDeductLoading(false); }
   }
 
-  async function loadPlans() {
+  async function openUpgradeDialog() {
     if (!ownerId || !clubId) return;
-    setActivatePlansLoading(true);
-    try {
-      const snap = await getDocs(
-        query(
-          collection(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/membershipPlans`),
-          where("isActive", "==", true)
-        )
-      );
-      setActivatePlans(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Plan, "id">) })));
-    } finally {
-      setActivatePlansLoading(false);
-    }
+    setUpgradeNewPlanId(""); setUpgradeError("");
+    // Load plans if not loaded
+    const { getDocs: _gd, collection: _col, query: _q, where: _w } = await import("firebase/firestore");
+    const snap = await _gd(_q(_col(firebaseDb(), `owners/${ownerId}/clubs/${clubId}/membershipPlans`), _w("isActive", "==", true)));
+    setUpgradePlans(snap.docs
+      .filter((d) => d.data()["planType"] !== "locker")
+      .map((d) => ({
+        id: d.id,
+        name: d.data()["name"] as string,
+        tier: d.data()["tier"] as string,
+        price: (d.data()["price"] as number) ?? 0,
+        visitQuota: (d.data()["visitQuota"] as number) ?? 0,
+        durationDays: (d.data()["durationDays"] as number | null) ?? null,
+        hasExpiry: (d.data()["hasExpiry"] as boolean) ?? false,
+      }))
+    );
+    setUpgradeOpen(true);
   }
 
-  async function handleActivateMembership() {
-    if (!activateSelectedPlan || !ownerId || !clubId) return;
-    setActivateSaving(true);
-    setActivateFeedback(undefined);
+  async function handleUpgrade() {
+    if (!activeMembership || !upgradeNewPlanId || !ownerId || !clubId) return;
+    setUpgradeLoading(true); setUpgradeError("");
     try {
-      const amountPaid = activateAmountPaid !== "" ? parseFloat(activateAmountPaid) : undefined;
-      await callFunction("membership_activate", {
+      await callFunction("membership_upgrade", {
         ownerId, clubId,
         requestId: uuidv4(), operationId: uuidv4(),
+        currentMembershipId: activeMembership.id,
+        newPlanId: upgradeNewPlanId,
         customerId,
-        planId: activateSelectedPlan.id,
         transactionId: uuidv4(),
-        ...(amountPaid !== undefined ? { amountPaid } : {}),
-        paymentMethod: activatePayMethod,
       });
-      const price = activateSelectedPlan.planType === "locker"
-        ? 0
-        : activateSelectedPlan.price ?? 0;
-      const paid = amountPaid ?? price;
-      const debt = Math.max(0, price - paid);
-      setActivateFeedback({
-        type: "ok",
-        msg: `✓ ${activateSelectedPlan.name} diaktifkan${debt > 0 ? ` · Utang: ${fmt(debt)}` : ""}`,
-      });
-      setTimeout(() => {
-        setActivateOpen(false);
-        setActivateSelectedPlan(null);
-        setActivateAmountPaid("");
-        setActivateFeedback(undefined);
-        loadAll();
-      }, 1200);
+      setUpgradeOpen(false);
+      loadAll();
     } catch (err) {
-      setActivateFeedback({ type: "err", msg: err instanceof Error ? err.message : "Gagal mengaktifkan" });
-    } finally {
-      setActivateSaving(false);
-    }
+      setUpgradeError(err instanceof Error ? err.message : "Gagal upgrade paket");
+    } finally { setUpgradeLoading(false); }
   }
 
   // ── Loading / not found states ────────────────────────────────────────────
@@ -463,6 +459,7 @@ export default function CustomerDetailPage() {
     { key: "transactions", label: "Transaksi",    count: transactions.length },
     { key: "visits",       label: "Kunjungan",    count: visits.length },
     { key: "debts",        label: "Utang",        count: activeDebts.length },
+    { key: "lomba",        label: "🏆 Lomba",     count: customer.competitionIds?.length ?? 0 },
   ];
 
   return (
@@ -610,147 +607,48 @@ export default function CustomerDetailPage() {
         </div>
       )}
 
-      {/* ── Activate Membership Dialog ───────────────────────────────────────── */}
-      {activateOpen && (
+      {/* ── Upgrade plan dialog ──────────────────────────────────────────────── */}
+      {upgradeOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]">
-            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Aktifkan Membership</h3>
-                <p className="text-xs text-slate-400 mt-0.5">{customer.displayName}</p>
-              </div>
-              <button
-                onClick={() => { setActivateOpen(false); setActivateSelectedPlan(null); setActivateFeedback(undefined); setActivateAmountPaid(""); }}
-                className="text-slate-400 hover:text-slate-600 text-xl leading-none"
-              >×</button>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <h3 className="font-bold text-slate-900">Upgrade Paket Membership</h3>
+              <button onClick={() => setUpgradeOpen(false)} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
             </div>
-
-            <div className="overflow-y-auto flex-1 min-h-0 p-6 space-y-4">
-              {activateFeedback && (
-                <div className={`text-sm rounded-xl px-4 py-3 ${activateFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                  {activateFeedback.msg}
-                </div>
-              )}
-
-              {/* Plan list */}
-              <div>
-                <p className="text-xs text-slate-500 font-medium mb-2">Pilih Paket</p>
-                {activatePlansLoading ? (
-                  <div className="flex justify-center py-8">
-                    <div className="w-6 h-6 border-2 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
-                  </div>
-                ) : activatePlans.length === 0 ? (
-                  <div className="text-center py-8 bg-slate-50 rounded-xl">
-                    <p className="text-sm text-slate-400">Belum ada paket membership aktif.</p>
-                    <p className="text-xs text-slate-400 mt-1">Buat paket di tab Membership di halaman Pelanggan.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {activatePlans.map((plan) => {
-                      const isLocker = plan.planType === "locker";
-                      const selected = activateSelectedPlan?.id === plan.id;
-                      return (
-                        <button
-                          key={plan.id}
-                          onClick={() => {
-                            setActivateSelectedPlan(plan);
-                            setActivateAmountPaid(isLocker ? "0" : (plan.price?.toString() ?? ""));
-                            setActivateFeedback(undefined);
-                          }}
-                          className={`w-full text-left p-4 rounded-xl border-2 transition ${
-                            selected
-                              ? isLocker ? "border-purple-400 bg-purple-50" : "border-blue-400 bg-blue-50"
-                              : "border-slate-200 hover:border-slate-300"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {isLocker ? (
-                                <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">🔑 LOKER</span>
-                              ) : (
-                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${PLAN_TIER_BADGE[plan.tier] ?? "bg-slate-100 text-slate-700"}`}>
-                                  {plan.tier?.toUpperCase()}
-                                </span>
-                              )}
-                              <span className="font-semibold text-slate-800 text-sm">{plan.name}</span>
-                            </div>
-                            <div className="text-right shrink-0">
-                              {isLocker ? (
-                                <p className="font-bold text-purple-700 text-sm">{fmt(plan.blendingFeePerSession ?? 0)}<span className="text-xs font-normal text-slate-400">/sesi</span></p>
-                              ) : (
-                                <p className="font-bold text-slate-800 text-sm">{fmt(plan.price)}</p>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex gap-3 mt-1.5 text-xs text-slate-400">
-                            <span>🎫 {isLocker ? (plan.visitQuota > 0 ? `${plan.visitQuota} kredit awal` : "Harian") : `${plan.visitQuota} kunjungan`}</span>
-                            {plan.hasExpiry && plan.durationDays && <span>⏱ {plan.durationDays} hari</span>}
-                            {!plan.hasExpiry && <span className="text-green-600">⏱ Tidak expired</span>}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Payment fields — shown only when a plan is selected */}
-              {activateSelectedPlan && activateSelectedPlan.planType !== "locker" && (
-                <div className="border-t border-slate-100 pt-4 space-y-3">
-                  <p className="text-xs text-slate-500 font-medium">Pembayaran</p>
-                  <label className="block">
-                    <span className="text-xs text-slate-500">Jumlah Bayar (Rp)</span>
-                    <div className="relative mt-1">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">Rp</span>
-                      <input
-                        type="number"
-                        min={0}
-                        className="w-full border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        value={activateAmountPaid}
-                        onChange={(e) => setActivateAmountPaid(e.target.value)}
-                      />
-                    </div>
-                    {activateAmountPaid !== "" && parseFloat(activateAmountPaid) < (activateSelectedPlan.price ?? 0) && (
-                      <p className="text-xs text-amber-600 mt-1">
-                        ⚠ Kurang {fmt((activateSelectedPlan.price ?? 0) - parseFloat(activateAmountPaid))} — sisa akan dicatat sebagai utang
+            <div className="px-6 py-5 space-y-3">
+              <p className="text-xs text-slate-400">Paket saat ini: <strong className="text-slate-600">{activeMembership?.planName}</strong></p>
+              {upgradePlans.filter((p) => p.id !== activeMembership?.planId).length === 0 ? (
+                <p className="text-sm text-slate-400 py-4 text-center">Tidak ada paket lain yang tersedia.</p>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {upgradePlans.filter((p) => p.id !== activeMembership?.planId).map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => setUpgradeNewPlanId(p.id)}
+                      className={`w-full text-left rounded-xl border-2 p-3 transition ${
+                        upgradeNewPlanId === p.id ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:border-slate-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-sm text-slate-800">{p.name}</span>
+                        <span className="text-sm font-bold text-slate-700">
+                          {new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(p.price)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {p.visitQuota}× · {p.hasExpiry && p.durationDays ? `${p.durationDays} hari` : "Tanpa expired"} · {p.tier.toUpperCase()}
                       </p>
-                    )}
-                  </label>
-                  <div>
-                    <span className="text-xs text-slate-500 block mb-1.5">Metode Bayar</span>
-                    <div className="flex gap-2">
-                      {(["cash", "transfer"] as const).map((m) => (
-                        <button
-                          key={m}
-                          onClick={() => setActivatePayMethod(m)}
-                          className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 transition ${
-                            activatePayMethod === m
-                              ? "border-blue-500 bg-blue-50 text-blue-700"
-                              : "border-slate-200 text-slate-500 hover:border-slate-300"
-                          }`}
-                        >
-                          {m === "cash" ? "💵 Tunai" : "🏦 Transfer"}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                    </button>
+                  ))}
                 </div>
               )}
+              {upgradeError && <div className="text-red-600 text-xs bg-red-50 rounded-lg px-3 py-2">{upgradeError}</div>}
             </div>
-
-            <div className="flex gap-3 px-6 pb-6 shrink-0 border-t border-slate-100 pt-4">
-              <button
-                onClick={() => { setActivateOpen(false); setActivateSelectedPlan(null); setActivateFeedback(undefined); setActivateAmountPaid(""); }}
-                className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 transition"
-              >
-                Batal
-              </button>
-              <button
-                onClick={handleActivateMembership}
-                disabled={activateSaving || !activateSelectedPlan}
-                className="flex-1 bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition"
-              >
-                {activateSaving ? "Mengaktifkan…" : "Aktifkan Membership"}
+            <div className="flex gap-3 px-6 pb-5">
+              <button onClick={() => setUpgradeOpen(false)} className="flex-1 border border-slate-200 text-slate-600 rounded-xl py-2.5 text-sm font-semibold hover:bg-slate-50 transition">Batal</button>
+              <button onClick={handleUpgrade} disabled={upgradeLoading || !upgradeNewPlanId}
+                className="flex-1 bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition">
+                {upgradeLoading ? "Memproses…" : "Upgrade Sekarang"}
               </button>
             </div>
           </div>
@@ -899,7 +797,12 @@ export default function CustomerDetailPage() {
         {TABS.map(({ key, label, count }) => (
           <button
             key={key}
-            onClick={() => setTab(key)}
+            onClick={() => {
+              setTab(key);
+              if (key === "lomba" && !compLoaded) {
+                loadCompetitions(customer.competitionIds ?? []);
+              }
+            }}
             className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition ${
               tab === key
                 ? "bg-white text-slate-900 shadow-sm"
@@ -933,13 +836,7 @@ export default function CustomerDetailPage() {
                 </div>
               </div>
               <button
-                onClick={() => {
-                  setActivateOpen(true);
-                  setActivateSelectedPlan(null);
-                  setActivateFeedback(undefined);
-                  setActivateAmountPaid("");
-                  loadPlans();
-                }}
+                onClick={() => router.push(`/pos?tab=membership&customerId=${customerId}`)}
                 className="shrink-0 bg-amber-500 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-amber-600 transition shadow-sm"
               >
                 + Aktifkan
@@ -947,41 +844,36 @@ export default function CustomerDetailPage() {
             </div>
           )}
 
-          {/* Locker top-up card */}
-          {isLocker && activeMembership && (
-            <div className="bg-purple-50 border border-purple-200 rounded-2xl p-5">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h4 className="font-bold text-purple-900 text-sm">Top-up Kredit Loker</h4>
-                  <p className="text-xs text-purple-600 mt-0.5">
-                    Saldo saat ini:&nbsp;
-                    <strong className="text-purple-800">{activeMembership.blendingCredits ?? 0} kredit</strong>
+          {/* ── Quick actions for active regular membership ── */}
+          {activeMembership && !isLocker && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold text-slate-800">{activeMembership.planName}</p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {activeMembership.visitRemaining !== null
+                    ? `${activeMembership.visitRemaining} kunjungan tersisa`
+                    : "Kunjungan tidak terbatas"}
+                  {activeMembership.expiresAt && ` · exp ${activeMembership.expiresAt.slice(0, 10)}`}
+                </p>
+                {deductFeedback && (
+                  <p className={`text-xs mt-1 font-medium ${deductFeedback.type === "ok" ? "text-green-600" : "text-red-600"}`}>
+                    {deductFeedback.msg}
                   </p>
-                </div>
-                <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center text-purple-700 font-bold">
-                  🔑
-                </div>
+                )}
               </div>
-              {topUpFeedback && (
-                <div className={`mb-3 text-sm rounded-xl px-3 py-2 ${topUpFeedback.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                  {topUpFeedback.msg}
-                </div>
-              )}
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  className="flex-1 border border-purple-200 bg-white rounded-xl px-3 py-2.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-purple-400"
-                  placeholder="Jumlah sesi"
-                  value={topUpSessions}
-                  onChange={(e) => setTopUpSessions(e.target.value)}
-                />
+              <div className="flex gap-2 shrink-0">
                 <button
-                  onClick={handleLockerTopUp}
-                  disabled={topUpLoading}
-                  className="bg-purple-600 text-white px-5 rounded-xl text-sm font-bold hover:bg-purple-700 disabled:opacity-50 transition"
+                  onClick={openUpgradeDialog}
+                  className="text-xs px-3 py-2 rounded-xl border border-blue-200 text-blue-600 font-semibold hover:bg-blue-50 transition"
                 >
-                  {topUpLoading ? "…" : "+ Top Up"}
+                  ↑ Upgrade
+                </button>
+                <button
+                  onClick={handleDeductVisit}
+                  disabled={deductLoading || activeMembership.visitRemaining === 0}
+                  className="text-xs px-4 py-2 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 disabled:opacity-40 transition"
+                >
+                  {deductLoading ? "…" : "✓ Catat Kunjungan"}
                 </button>
               </div>
             </div>
@@ -1250,6 +1142,80 @@ export default function CustomerDetailPage() {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {/* ── Lomba tab ────────────────────────────────────────────────────────── */}
+      {tab === "lomba" && (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100">
+            <h3 className="font-semibold text-slate-800">Riwayat Lomba</h3>
+          </div>
+          {compLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="w-6 h-6 border-2 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
+            </div>
+          ) : (customer.competitionIds?.length ?? 0) === 0 ? (
+            <div className="px-5 py-10 text-center">
+              <p className="text-2xl mb-2">🏆</p>
+              <p className="text-sm text-slate-400">Belum pernah ikut lomba.</p>
+            </div>
+          ) : compList.length === 0 && compLoaded ? (
+            <div className="px-5 py-10 text-center">
+              <p className="text-sm text-slate-400">Data lomba tidak ditemukan.</p>
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-xs">
+                <tr>
+                  <th className="px-5 py-3 text-left font-semibold">Lomba</th>
+                  <th className="px-5 py-3 text-left font-semibold">Periode</th>
+                  <th className="px-5 py-3 text-center font-semibold">Peserta</th>
+                  <th className="px-5 py-3 text-center font-semibold">Status</th>
+                  {compList.some((c) => c.adminFee > 0) && (
+                    <th className="px-5 py-3 text-right font-semibold">Biaya Admin</th>
+                  )}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {compList.map((c) => {
+                  const today  = new Date().toISOString().slice(0, 10);
+                  const status = c.status === "finished"
+                    ? "finished"
+                    : today < c.startDate ? "upcoming" : today > c.endDate ? "finished" : "active";
+                  const statusStyle = status === "active"
+                    ? "bg-green-100 text-green-700"
+                    : status === "finished"
+                    ? "bg-slate-100 text-slate-500"
+                    : "bg-blue-100 text-blue-700";
+                  const statusLabel = status === "active" ? "Berjalan" : status === "finished" ? "Selesai" : "Akan Datang";
+                  return (
+                    <tr key={c.id} className="hover:bg-slate-50 transition">
+                      <td className="px-5 py-3 font-medium text-slate-800">{c.name}</td>
+                      <td className="px-5 py-3 text-xs text-slate-500">
+                        {new Date(c.startDate + "T00:00:00").toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                        {" — "}
+                        {new Date(c.endDate + "T00:00:00").toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                      </td>
+                      <td className="px-5 py-3 text-center text-slate-600">{c.participantCount}</td>
+                      <td className="px-5 py-3 text-center">
+                        <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${statusStyle}`}>
+                          {statusLabel}
+                        </span>
+                      </td>
+                      {compList.some((cc) => cc.adminFee > 0) && (
+                        <td className="px-5 py-3 text-right text-xs font-medium text-slate-700">
+                          {c.adminFee > 0
+                            ? new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(c.adminFee)
+                            : <span className="text-slate-400">—</span>}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
