@@ -81,7 +81,7 @@ export const membership_activate = onCall(async (request) => {
   }
 
   const payload = validatePayload(activateMembershipSchema, request.data);
-  const { ownerId, clubId, operationId, customerId, planId } = payload;
+  const { ownerId, clubId, operationId, customerId, planId, lockerSessions } = payload;
 
   const idempotencyPath = `owners/${ownerId}/clubs/${clubId}/_idempotency`;
   const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
@@ -145,8 +145,16 @@ export const membership_activate = onCall(async (request) => {
     : (hasExpiry && durationDays ? new Date(Date.now() + durationDays * 86_400_000).toISOString() : null);
 
   const membershipRef = db.collection(COLLECTIONS.MEMBERSHIPS(ownerId, clubId)).doc();
-  const visitQuota = isLocker ? ((plan["visitQuota"] as number) ?? 0) : (plan["visitQuota"] as number);
-  const price = isLocker ? 0 : (plan["price"] as number);
+
+  const blendingFeePerSession = isLocker ? ((plan["blendingFeePerSession"] as number) ?? 0) : 0;
+  // lockerSessions: buy N sessions upfront; overrides plan's default visitQuota for credits
+  const visitQuota = isLocker
+    ? (lockerSessions ?? ((plan["visitQuota"] as number) ?? 0))
+    : (plan["visitQuota"] as number);
+  // price for locker = sessions × fee; 0 when no upfront purchase
+  const price = isLocker
+    ? (lockerSessions ? lockerSessions * blendingFeePerSession : 0)
+    : (plan["price"] as number);
 
   // Partial payment / debt handling
   const amountPaid = payload.amountPaid != null ? payload.amountPaid : price;
@@ -232,10 +240,48 @@ export const membership_activate = onCall(async (request) => {
         totalAmount: price,
         paidAmount: amountPaid,
         remainingAmount: remainingDebt,
-        status: amountPaid === 0 ? "outstanding" : "partial",
+        status: amountPaid === 0 ? "unpaid" : "partial",
         payments: amountPaid > 0
           ? [{ amount: amountPaid, paymentMethod, notes: null, paidAt: now }]
           : [],
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    // Create a visible transaction document for every paid membership activation
+    if (price > 0) {
+      const txRef = db
+        .collection(COLLECTIONS.TRANSACTIONS(ownerId, clubId))
+        .doc(payload.transactionId);
+      const txItems = isLocker && lockerSessions
+        ? [{
+            productName: `${plan["name"] as string} – ${lockerSessions} sesi`,
+            productId: planId,
+            quantity: lockerSessions,
+            unitPrice: blendingFeePerSession,
+            subtotal: price,
+          }]
+        : [{
+            productName: plan["name"] as string,
+            productId: planId,
+            quantity: 1,
+            unitPrice: price,
+            subtotal: price,
+          }];
+      tx.set(txRef, {
+        id: payload.transactionId,
+        ownerId, clubId, customerId,
+        type: "membership",
+        total: price,
+        amountPaid,
+        paymentMethod,
+        status: "completed",
+        items: txItems,
+        debtId: debtRef?.id ?? null,
+        remainingDebt,
+        membershipId: membershipRef.id,
+        createdBy: role,
         createdAt: now,
         updatedAt: now,
       });

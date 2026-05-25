@@ -1,9 +1,6 @@
-"use client";
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { redirect } from "next/navigation";
 
-export default function MembershipRedirect() {
-  const router = useRouter();
-  useEffect(() => { router.replace("/customers"); }, [router]);
-  return null;
+// Fitur paket membership sudah dipindah ke tab "Paket Member" di halaman Pelanggan & Member.
+export default function MembershipPage() {
+  redirect("/customers");
 }

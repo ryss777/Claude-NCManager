@@ -24,6 +24,9 @@ export const activateMembershipSchema = tenantRefSchema
     transactionId: z.string().min(1),
     amountPaid: z.number().min(0).nullish(),
     paymentMethod: z.enum(["cash", "transfer"]).nullish(),
+    // For locker plans only: number of sessions to purchase upfront.
+    // If provided, overrides the plan's visitQuota and records a transaction.
+    lockerSessions: z.number().int().min(1).nullish(),
   });
 
 export const deductVisitSchema = tenantRefSchema.merge(idempotencySchema).extend({
