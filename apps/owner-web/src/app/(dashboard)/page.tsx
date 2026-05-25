@@ -19,6 +19,13 @@ interface Stats {
   activeDebts: number;
 }
 
+interface ActiveCompetition {
+  id: string;
+  name: string;
+  participantCount: number;
+  endDate: string;
+}
+
 interface RecentTx {
   id: string;
   items: { productName: string; quantity: number }[];
@@ -53,6 +60,8 @@ export default function DashboardHome() {
   const [stats, setStats]             = useState<Stats | null>(null);
   const [recentTx, setRecentTx]       = useState<RecentTx[]>([]);
   const [lowItems, setLowItems]       = useState<LowStockItem[]>([]);
+  const [activeComps, setActiveComps] = useState<ActiveCompetition[]>([]);
+  const [todayRevenue, setTodayRevenue] = useState(0);
   const [loading, setLoading]         = useState(true);
 
   useEffect(() => {
@@ -68,7 +77,10 @@ export default function DashboardHome() {
 
       const soonIso = new Date(Date.now() + 7 * 86_400_000).toISOString();
 
-      const [ops, plans, items, customers, memberships, debts, txSnap] = await Promise.all([
+      const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+      const todayEnd   = `${new Date().toISOString().slice(0, 10)}T23:59:59.999Z`;
+
+      const [ops, plans, items, customers, memberships, debts, txSnap, compSnap, journalSnap] = await Promise.all([
         getDocs(query(collection(db, `${base}/operators`), where("isActive", "==", true))),
         getDocs(query(collection(db, `${base}/membershipPlans`), where("isActive", "==", true))),
         getDocs(collection(db, `${base}/inventoryItems`)),
@@ -76,7 +88,24 @@ export default function DashboardHome() {
         getDocs(query(collection(db, `${base}/memberships`), where("status", "==", "active"))),
         getDocs(query(collection(db, `${base}/debts`), where("status", "in", ["unpaid", "partial"]))),
         getDocs(query(collection(db, `${base}/transactions`), orderBy("createdAt", "desc"), limit(6))),
+        getDocs(collection(db, `${base}/competitions`)),
+        getDocs(query(
+          collection(db, `${base}/financeJournal`),
+          where("createdAt", ">=", todayStart),
+          where("createdAt", "<=", todayEnd),
+        )),
       ]);
+
+      // Sum today's revenue from journal
+      const REVENUE_CREDITS = new Set(["SALES_REVENUE", "MEMBERSHIP_REVENUE", "4001", "4002"]);
+      let rev = 0;
+      journalSnap.docs.forEach((d) => {
+        const data = d.data();
+        if (REVENUE_CREDITS.has(data["creditAccount"] as string)) {
+          rev += (data["amount"] as number) ?? 0;
+        }
+      });
+      setTodayRevenue(rev);
 
       const low = items.docs.filter((d) => {
         const data = d.data();
@@ -114,6 +143,25 @@ export default function DashboardHome() {
         createdAt: d.data()["createdAt"] as string,
         createdBy: d.data()["createdBy"] as string,
       })));
+
+      const today = new Date().toISOString().slice(0, 10);
+      setActiveComps(
+        compSnap.docs
+          .filter((d) => {
+            // Trust stored "finished" status — handles force-ended where endDate === today
+            if ((d.data()["status"] as string | undefined) === "finished") return false;
+            const s = d.data()["startDate"] as string;
+            const e = d.data()["endDate"] as string;
+            return today >= s && today <= e;
+          })
+          .map((d) => ({
+            id: d.id,
+            name: d.data()["name"] as string,
+            participantCount: (d.data()["participantCount"] as number) ?? 0,
+            endDate: d.data()["endDate"] as string,
+          }))
+          .sort((a, b) => a.endDate.localeCompare(b.endDate))
+      );
     } finally {
       setLoading(false);
     }
@@ -124,7 +172,7 @@ export default function DashboardHome() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-5xl space-y-7">
+    <div className="space-y-7">
 
       {/* ── Greeting header ───────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
@@ -141,7 +189,18 @@ export default function DashboardHome() {
       </div>
 
       {/* ── KPI strip ────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+
+        {/* Pendapatan hari ini */}
+        <Link href="/reports"
+          className="bg-indigo-50 rounded-2xl p-4 hover:bg-indigo-100 transition sm:col-span-1"
+        >
+          <p className="text-xs font-semibold text-indigo-600 mb-2">Pendapatan Hari Ini</p>
+          <p className="text-xl font-bold text-indigo-700 leading-none">
+            {loading ? <span className="text-slate-300">…</span> : fmt(todayRevenue)}
+          </p>
+          <p className="text-xs text-indigo-400 mt-1.5">dari jurnal keuangan</p>
+        </Link>
 
         {/* Member aktif */}
         <Link href="/customers"
@@ -222,27 +281,40 @@ export default function DashboardHome() {
           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Akses Cepat</p>
 
           {/* Primary actions */}
-          <div className="grid grid-cols-2 gap-3">
-            {([
-              { href: "/customers", icon: "🧑‍🤝‍🧑", label: "Pelanggan",  desc: "Daftar & kelola membership",  cls: "bg-blue-600 text-white hover:bg-blue-700" },
-              { href: "/transfer",  icon: "↔️",  label: "Transfer Produk", desc: "Kirim dari gudang ke club", cls: "bg-teal-600 text-white hover:bg-teal-700" },
-            ] as const).map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`flex flex-col gap-1.5 rounded-2xl p-5 transition ${item.cls}`}
-              >
-                <span className="text-2xl">{item.icon}</span>
-                <span className="font-bold text-sm leading-tight">{item.label}</span>
-                <span className="text-xs opacity-75">{item.desc}</span>
-              </Link>
-            ))}
-          </div>
+          {(() => {
+            const hasLomba = !loading && activeComps.length > 0;
+            const primaryItems = [
+              { href: "/customers", icon: "🧑‍🤝‍🧑", label: "Pelanggan",       desc: "Daftar & kelola membership",                         cls: "bg-blue-600 text-white hover:bg-blue-700" },
+              { href: "/transfer",  icon: "↔️",        label: "Transfer Produk", desc: "Kirim dari gudang ke club",                           cls: "bg-teal-600 text-white hover:bg-teal-700" },
+              ...(hasLomba ? [{
+                href:  "/lomba",
+                icon:  "🏆",
+                label: "Lomba Berjalan",
+                desc:  `${activeComps.length} lomba aktif sekarang`,
+                cls:   "bg-amber-500 text-white hover:bg-amber-600",
+              }] : []),
+            ];
+            return (
+              <div className={`grid gap-3 ${hasLomba ? "grid-cols-3" : "grid-cols-2"}`}>
+                {primaryItems.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`flex flex-col gap-1.5 rounded-2xl p-5 transition ${item.cls}`}
+                  >
+                    <span className="text-2xl">{item.icon}</span>
+                    <span className="font-bold text-sm leading-tight">{item.label}</span>
+                    <span className="text-xs opacity-75">{item.desc}</span>
+                  </Link>
+                ))}
+              </div>
+            );
+          })()}
 
           {/* Secondary actions */}
           <div className="grid grid-cols-3 gap-3">
             {([
-              { href: "/membership",   icon: "⭐", label: "Paket Member",  desc: "Kelola paket" },
+              { href: "/customers",    icon: "⭐", label: "Paket Member",  desc: "Kelola paket" },
               { href: "/inventory",    icon: "📦", label: "Produk & Stok", desc: "Stok & harga jual" },
               { href: "/transactions", icon: "🧾", label: "Transaksi",     desc: "Riwayat penjualan" },
               { href: "/debts",        icon: "💰", label: "Utang Piutang", desc: "Kelola tagihan" },
@@ -352,6 +424,38 @@ export default function DashboardHome() {
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Active competitions widget */}
+          {!loading && activeComps.length > 0 && (
+            <div className="bg-green-50 rounded-2xl border border-green-200 overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-green-100">
+                <h3 className="text-sm font-bold text-green-700">🏆 Lomba Berjalan</h3>
+                <Link href="/lomba" className="text-xs text-green-600 hover:underline font-medium">
+                  Kelola →
+                </Link>
+              </div>
+              <div className="divide-y divide-green-100">
+                {activeComps.map((comp) => {
+                  const today = new Date().toISOString().slice(0, 10);
+                  const daysLeft = Math.max(
+                    0,
+                    Math.ceil((new Date(comp.endDate).getTime() - new Date(today).getTime()) / 86_400_000)
+                  );
+                  return (
+                    <div key={comp.id} className="flex items-center justify-between px-4 py-2.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-slate-800 truncate">{comp.name}</p>
+                        <p className="text-xs text-slate-400">{comp.participantCount} peserta</p>
+                      </div>
+                      <span className={`text-xs font-bold ml-3 shrink-0 ${daysLeft <= 3 ? "text-red-500" : "text-green-600"}`}>
+                        {daysLeft}h lagi
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

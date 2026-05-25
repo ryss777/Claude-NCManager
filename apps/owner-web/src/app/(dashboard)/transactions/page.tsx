@@ -51,6 +51,10 @@ interface MembershipTx {
   debtId: string | null;
   createdBy: string | null;
   operatorId: string | null;
+  // Present when there is a paid transaction doc for this membership
+  total?: number;
+  amountPaid?: number;
+  paymentMethod?: string;
 }
 
 interface DebtPaymentTx {
@@ -135,7 +139,7 @@ interface Debt {
   totalAmount: number;
   paidAmount: number;
   remainingAmount: number;
-  status: "outstanding" | "partial" | "paid";
+  status: "unpaid" | "outstanding" | "partial" | "paid";
   payments: { amount: number; paymentMethod: string; notes: string | null; paidAt: string }[];
   createdAt: string;
   updatedAt: string;
@@ -147,7 +151,7 @@ interface DebtCustomer {
   phone: string | null;
 }
 
-type DebtStatusFilter = "all" | "outstanding" | "partial" | "paid";
+type DebtStatusFilter = "all" | "unpaid" | "partial" | "paid";
 
 // ── Finance types ─────────────────────────────────────────────────────────────
 
@@ -405,8 +409,27 @@ export default function TransactionsPage() {
       debtSnap.docs.forEach((d) => { debtMap[d.id] = (d.data()["remainingAmount"] as number) ?? 0; });
       setDebtRemaining(debtMap);
 
+      // Build a map: membershipId → { total, amountPaid, paymentMethod } from paid membership txs
+      const memTxMap = new Map<string, { total: number; amountPaid: number; paymentMethod: string }>();
+      txSnap.docs.forEach((d) => {
+        const data = d.data();
+        if (data["type"] === "membership" && data["membershipId"]) {
+          memTxMap.set(data["membershipId"] as string, {
+            total: (data["total"] as number) ?? 0,
+            amountPaid: (data["amountPaid"] as number) ?? 0,
+            paymentMethod: (data["paymentMethod"] as string) ?? "cash",
+          });
+        }
+      });
+
       const txItems: (ProductTx | DebtPaymentTx | TransferTx | ExchangeTx)[] = txSnap.docs
-        .filter((d) => d.data()["status"] !== "reversed")
+        .filter((d) => {
+          const data = d.data();
+          if (data["status"] === "reversed") return false;
+          // Skip membership type — we surface these through the memberships collection
+          if (data["type"] === "membership") return false;
+          return true;
+        })
         .map((d) => {
           const data = d.data();
           if (data["type"] === "debt_payment") return { kind: "debt_payment" as const, id: d.id, ...data } as DebtPaymentTx;
@@ -415,7 +438,13 @@ export default function TransactionsPage() {
           return { kind: "product" as const, id: d.id, ...data } as ProductTx;
         });
 
-      const memItems: MembershipTx[] = memSnap.docs.map((d) => ({ kind: "membership" as const, id: d.id, ...d.data() } as MembershipTx));
+      const memItems: MembershipTx[] = memSnap.docs.map((d) => {
+        const base = { kind: "membership" as const, id: d.id, ...d.data() } as MembershipTx;
+        // Enrich with payment data from the transactions collection
+        const txData = memTxMap.get(d.id);
+        if (txData) return { ...base, ...txData };
+        return base;
+      });
 
       setItems(
         [...txItems, ...memItems].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -575,6 +604,10 @@ export default function TransactionsPage() {
 
   const filteredDebts = useMemo(() => {
     if (debtStatusFilter === "all") return debts.filter((d) => d.status !== "paid");
+    // Legacy "outstanding" rows are equivalent to "unpaid" — treat them together.
+    if (debtStatusFilter === "unpaid") {
+      return debts.filter((d) => d.status === "unpaid" || d.status === "outstanding");
+    }
     return debts.filter((d) => d.status === debtStatusFilter);
   }, [debts, debtStatusFilter]);
 
@@ -936,7 +969,9 @@ export default function TransactionsPage() {
                           <td className="px-4 py-3">{creatorBadge(item.createdBy ?? null, item.operatorId ?? null)}</td>
                           <td className="px-4 py-3 font-medium text-slate-800">{customerName}</td>
                           <td className="px-4 py-3 text-slate-500 truncate max-w-xs">{item.planName}</td>
-                          <td className="px-4 py-3 text-right text-slate-400 text-xs">—</td>
+                          <td className="px-4 py-3 text-right font-semibold text-slate-800">
+                            {item.total != null && item.total > 0 ? fmtIdr(item.total) : <span className="text-slate-300 text-xs">—</span>}
+                          </td>
                           <td className="px-4 py-3 text-center">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${item.status === "active" ? "bg-green-100 text-green-700" : item.status === "expired" ? "bg-slate-100 text-slate-500" : item.status === "pending_next" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
                               {item.status === "pending_next" ? "antrian" : item.status}
@@ -1222,9 +1257,9 @@ export default function TransactionsPage() {
                   )}
 
                   {selected.kind === "membership" && (
-                    <div className="space-y-1.5">
+                    <div className="space-y-1.5 text-sm">
                       <div className="flex justify-between text-slate-700"><span className="text-slate-400">Paket</span><span className="font-semibold">{selected.planName}</span></div>
-                      <div className="flex justify-between text-slate-700"><span className="text-slate-400">Tier</span><span className="capitalize">{selected.tier}</span></div>
+                      {selected.tier && <div className="flex justify-between text-slate-700"><span className="text-slate-400">Tier</span><span className="capitalize">{selected.tier}</span></div>}
                       {selected.planType !== "locker" && <>
                         <div className="flex justify-between text-slate-700"><span className="text-slate-400">Kuota</span><span>{selected.visitQuota}× kunjungan</span></div>
                         <div className="flex justify-between text-slate-700"><span className="text-slate-400">Durasi</span><span>{selected.hasExpiry && selected.durationDays ? `${selected.durationDays} hari` : "Tidak ada expired"}</span></div>
@@ -1235,6 +1270,13 @@ export default function TransactionsPage() {
                           {selected.status === "pending_next" ? "Antrian" : selected.status}
                         </span>
                       </div>
+                      {selected.total != null && selected.total > 0 && (
+                        <div className="border-t border-slate-100 pt-2 space-y-1.5 mt-2">
+                          <div className="flex justify-between font-bold text-slate-800"><span>Total</span><span>{fmtIdr(selected.total)}</span></div>
+                          {selected.amountPaid != null && <div className="flex justify-between text-slate-500"><span>Dibayar</span><span>{fmtIdr(selected.amountPaid)}</span></div>}
+                          {selected.paymentMethod && <div className="flex justify-between text-slate-500"><span>Metode</span><span>{selected.paymentMethod === "cash" ? "Tunai" : "Transfer"}</span></div>}
+                        </div>
+                      )}
                       {selected.debtId && (debtRemaining[selected.debtId] ?? 0) > 0 && (
                         <div className="mt-2 px-3 py-2 bg-amber-50 rounded-lg text-amber-700 text-xs font-medium">Ada utang — cek tab Utang di profil pelanggan</div>
                       )}
@@ -1368,7 +1410,7 @@ export default function TransactionsPage() {
           <div className="flex gap-2 mb-4">
             {([
               { key: "all",         label: "Belum Lunas" },
-              { key: "outstanding", label: "Belum Bayar" },
+              { key: "unpaid",      label: "Belum Bayar" },
               { key: "partial",     label: "Sebagian" },
               { key: "paid",        label: "Lunas" },
             ] as { key: DebtStatusFilter; label: string }[]).map((f) => (
