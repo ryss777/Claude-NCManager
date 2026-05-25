@@ -16,6 +16,7 @@ import {
   persistentMultipleTabManager,
   connectFirestoreEmulator,
 } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 export type { Firestore } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -67,6 +68,10 @@ export function firebaseAuth() {
 
 export function firebaseFunctions() {
   return getFunctions(getApp());
+}
+
+export function firebaseStorage() {
+  return getStorage(getApp());
 }
 
 export async function signInWithGoogle(): Promise<User> {
