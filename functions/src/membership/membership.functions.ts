@@ -328,21 +328,25 @@ export const membership_deductVisit = onCall(async (request) => {
     throw new HttpsError("permission-denied", "Membership does not belong to this customer");
   }
 
-  const visitRemaining = membership["visitRemaining"] as number;
-  if (visitRemaining <= 0) throw new HttpsError("resource-exhausted", "No visits remaining");
-
   const expiresAtRaw = membership["expiresAt"] as string | null;
   if (expiresAtRaw && new Date(expiresAtRaw) < new Date()) {
     await membershipRef.update({ status: "expired", updatedAt: new Date().toISOString() });
     throw new HttpsError("failed-precondition", "Membership has expired");
   }
 
-  const visitsAfter = visitRemaining - 1;
+  // Pre-check: prevent obvious exhausted state without hitting the tx.
+  // The authoritative check happens inside the tx below.
+  if ((membership["visitRemaining"] as number) <= 0) {
+    throw new HttpsError("resource-exhausted", "No visits remaining");
+  }
+
   const now = new Date().toISOString();
   const visitRef = db.collection(COLLECTIONS.MEMBERSHIP_VISITS(ownerId, clubId)).doc();
+  let visitsAfter = 0;
 
-  // Pre-fetch pending_next before entering transaction (reads must precede writes)
-  const pendingNextSnap = visitsAfter === 0
+  // Pre-fetch pending_next for the common path (visitsAfter === 0). The tx
+  // re-checks state and skips this branch if the pre-tx prediction was wrong.
+  const pendingNextSnap = (membership["visitRemaining"] as number) === 1
     ? await db.collection(COLLECTIONS.MEMBERSHIPS(ownerId, clubId))
         .where("customerId", "==", customerId)
         .where("status", "==", "pending_next")
@@ -351,6 +355,18 @@ export const membership_deductVisit = onCall(async (request) => {
     : null;
 
   await db.runTransaction(async (tx) => {
+    // Re-read inside tx so concurrent deductions don't double-spend a visit.
+    const freshSnap = await tx.get(membershipRef);
+    const fresh = freshSnap.data() ?? {};
+    const visitRemaining = (fresh["visitRemaining"] as number | undefined) ?? 0;
+    const visitUsed = (fresh["visitUsed"] as number | undefined) ?? 0;
+
+    if (visitRemaining <= 0) {
+      throw new HttpsError("resource-exhausted", "No visits remaining");
+    }
+
+    visitsAfter = visitRemaining - 1;
+
     tx.create(visitRef, {
       id: visitRef.id,
       ownerId, clubId, membershipId, customerId, transactionId,
@@ -361,7 +377,7 @@ export const membership_deductVisit = onCall(async (request) => {
       createdAt: now,
     });
     tx.update(membershipRef, {
-      visitUsed: (membership["visitUsed"] as number) + 1,
+      visitUsed: visitUsed + 1,
       visitRemaining: visitsAfter,
       status: visitsAfter === 0 ? "expired" : "active",
       updatedAt: now,
@@ -681,13 +697,18 @@ export const locker_topUp = onCall(async (request) => {
   }
 
   const blendingFeePerSession = membership["blendingFeePerSession"] as number;
-  const currentCredits = membership["blendingCredits"] as number;
   const total = sessions * blendingFeePerSession;
   const now = new Date().toISOString();
+  let creditsAfter = 0;
 
   await db.runTransaction(async (tx) => {
+    // Re-read inside tx so concurrent top-ups don't overwrite each other.
+    const freshSnap = await tx.get(membershipRef);
+    const currentCredits = (freshSnap.data()?.["blendingCredits"] as number | undefined) ?? 0;
+    creditsAfter = currentCredits + sessions;
+
     tx.update(membershipRef, {
-      blendingCredits: currentCredits + sessions,
+      blendingCredits: creditsAfter,
       updatedAt: now,
     });
 
@@ -707,11 +728,11 @@ export const locker_topUp = onCall(async (request) => {
     }
 
     await markOperationComplete(tx, operationId, idempotencyPath, {
-      membershipId, sessions, creditsAfter: currentCredits + sessions,
+      membershipId, sessions, creditsAfter,
     });
   });
 
-  return { membershipId, sessions, creditsAfter: currentCredits + sessions, total };
+  return { membershipId, sessions, creditsAfter, total };
 });
 
 // ── locker_recordVisit ────────────────────────────────────────────────────────
@@ -748,30 +769,37 @@ export const locker_recordVisit = onCall(async (request) => {
     throw new HttpsError("failed-precondition", "Ini bukan membership loker");
   }
 
-  const currentCredits = membership["blendingCredits"] as number;
   const blendingFeePerSession = membership["blendingFeePerSession"] as number;
-  const visitUsed = (membership["visitUsed"] as number) ?? 0;
 
-  if (paymentType === "credits" && currentCredits < guestCount) {
-    throw new HttpsError(
-      "resource-exhausted",
-      `Kredit tidak cukup. Tersisa ${currentCredits} sesi, butuh ${guestCount}`
-    );
-  }
-
-  // Expiry check
+  // Expiry check (pre-tx, fire-and-forget update — error path)
   const expiresAtRaw = membership["expiresAt"] as string | null;
   if (expiresAtRaw && new Date(expiresAtRaw) < new Date()) {
     await membershipRef.update({ status: "expired", updatedAt: new Date().toISOString() });
     throw new HttpsError("failed-precondition", "Membership loker sudah kadaluarsa");
   }
 
-  const creditsBefore = currentCredits;
-  const creditsAfter = paymentType === "credits" ? currentCredits - guestCount : currentCredits;
   const now = new Date().toISOString();
   const visitRef = db.collection(COLLECTIONS.MEMBERSHIP_VISITS(ownerId, clubId)).doc();
+  let creditsBefore = 0;
+  let creditsAfter = 0;
 
   await db.runTransaction(async (tx) => {
+    // Re-read inside tx so concurrent visits don't double-spend credits.
+    const freshSnap = await tx.get(membershipRef);
+    const fresh = freshSnap.data() ?? {};
+    const currentCredits = (fresh["blendingCredits"] as number | undefined) ?? 0;
+    const visitUsed = (fresh["visitUsed"] as number | undefined) ?? 0;
+
+    if (paymentType === "credits" && currentCredits < guestCount) {
+      throw new HttpsError(
+        "resource-exhausted",
+        `Kredit tidak cukup. Tersisa ${currentCredits} sesi, butuh ${guestCount}`
+      );
+    }
+
+    creditsBefore = currentCredits;
+    creditsAfter = paymentType === "credits" ? currentCredits - guestCount : currentCredits;
+
     const updates: Record<string, unknown> = { visitUsed: visitUsed + guestCount, updatedAt: now };
     if (paymentType === "credits") updates["blendingCredits"] = creditsAfter;
     tx.update(membershipRef, updates);
