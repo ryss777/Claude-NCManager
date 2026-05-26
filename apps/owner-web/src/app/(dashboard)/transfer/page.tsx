@@ -34,7 +34,7 @@ interface Transfer {
   destinationClubId: string | null;
   paymentType: "bayar" | "pinjam";
   status: "pending_acceptance" | "completed" | "rejected";
-  totalAmount: number;
+  total: number;
   items: { productName: string; quantity: number; subtotal: number }[];
   notes: string | null;
   createdAt: string;
@@ -475,7 +475,7 @@ export default function TransferPage() {
                     </span>
                   </td>
                   <td className="px-5 py-3 text-right font-bold text-slate-800 text-xs">
-                    {fmtIdr(tx.totalAmount ?? 0)}
+                    {fmtIdr(tx.total ?? 0)}
                   </td>
                   <td className="px-5 py-3 text-center">
                     <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${STATUS_STYLE[tx.status] ?? "bg-slate-100 text-slate-500"}`}>

@@ -83,6 +83,12 @@ interface ActiveLockerMember {
 const fmtIdr = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 
+// Escape user-controlled strings before interpolating into the printable
+// receipt HTML below — product names and customer names come from Firestore
+// records that operators type in by hand.
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+
 const CATEGORIES = ["Semua", "Inner Nutrition", "Outer Nutrition", "Accessories"];
 const CAT_SHORT: Record<string, string> = {
   "Inner Nutrition": "Inner", "Outer Nutrition": "Outer", "Accessories": "Akses",
@@ -473,7 +479,7 @@ export default function OwnerPosPage() {
     }
     setLockChecking(true); setLockFeedback(undefined);
     try {
-      await callFunction("membership_lockerRecordVisit", {
+      await callFunction("locker_recordVisit", {
         ownerId, clubId,
         requestId: uuidv4(), operationId: uuidv4(),
         membershipId: lockSelectedMember.membershipId,
@@ -539,7 +545,7 @@ export default function OwnerPosPage() {
   // ── Print receipt ──────────────────────────────────────────────────────────
   function printReceipt(r: NonNullable<typeof receipt>) {
     const lines = r.items.map((i) =>
-      `<tr><td style="padding:2px 8px 2px 0;word-break:break-word">${i.qty}× ${i.productName}</td>` +
+      `<tr><td style="padding:2px 8px 2px 0;word-break:break-word">${i.qty}× ${escapeHtml(i.productName)}</td>` +
       `<td style="text-align:right;white-space:nowrap">${fmtIdr(i.qty * i.unitPrice)}</td></tr>`
     ).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
@@ -556,7 +562,7 @@ export default function OwnerPosPage() {
       <h3>NC Manager</h3>
       <p class="sub">${r.timestamp}</p>
       <p class="sub">#${r.transactionId.slice(0, 12).toUpperCase()}</p>
-      ${r.customer ? `<p class="sub">Pelanggan: ${r.customer.displayName}</p>` : ""}
+      ${r.customer ? `<p class="sub">Pelanggan: ${escapeHtml(r.customer.displayName)}</p>` : ""}
       <hr>
       <table>${lines}</table>
       <hr>
