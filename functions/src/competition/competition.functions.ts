@@ -16,6 +16,7 @@ import {
   DEFAULT_SCORING_WEIGHTS,
 } from "@nc-manager/validation";
 import { COLLECTIONS } from "@nc-manager/shared-constants";
+import { computeStatus, effectiveStatus } from "./competition.helpers";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -27,21 +28,6 @@ function writeLog(
 ): void {
   const logRef = db.collection(logCollPath).doc();
   tx.set(logRef, { ...entry, createdAt: now });
-}
-
-function computeStatus(startDate: string, endDate: string): "upcoming" | "active" | "finished" {
-  const today = new Date().toISOString().slice(0, 10);
-  if (today < startDate) return "upcoming";
-  if (today > endDate) return "finished";
-  return "active";
-}
-
-// Trust stored "finished" status — date-only compute returns "active" when
-// endDate === today (case after force-end), which would let forceEnd/forceStart
-// run again on an already-finished competition.
-function effectiveStatus(comp: Record<string, unknown>): "upcoming" | "active" | "finished" {
-  if (comp["status"] === "finished") return "finished";
-  return computeStatus(comp["startDate"] as string, comp["endDate"] as string);
 }
 
 // ── competition_create ────────────────────────────────────────────────────────
