@@ -146,39 +146,45 @@ export const inventory_createMovement = onCall(async (request) => {
 
   const itemRef = db.collection(COLLECTIONS.INVENTORY_ITEMS(ownerId, clubId)).doc(inventoryItemId);
 
-  const itemSnap = await itemRef.get();
-  if (!itemSnap.exists) {
+  // Pre-check existence + grab item name for the movement log. Stock math
+  // happens inside the tx so concurrent movements can't both compute
+  // stockAfter from the same stale currentStock.
+  const preSnap = await itemRef.get();
+  if (!preSnap.exists) {
     throw new HttpsError("not-found", "Inventory item not found");
   }
-
-  const item = itemSnap.data()!;
-  const currentStock = item["currentStock"] as number;
+  const itemName = preSnap.data()!["name"] as string;
 
   // Determine direction: additions vs subtractions
   const isAddition = ["restock", "transfer_in", "opening_stock", "reversal"].includes(movementType);
   const stockDelta = isAddition ? quantity : -quantity;
-  const stockAfter = currentStock + stockDelta;
-
-  if (stockAfter < 0) {
-    throw new HttpsError(
-      "failed-precondition",
-      `Insufficient stock — current: ${currentStock}, requested: ${quantity}`
-    );
-  }
 
   const now = new Date().toISOString();
   const movementRef = db
     .collection(COLLECTIONS.INVENTORY_MOVEMENTS(ownerId, clubId))
     .doc();
+  let currentStock = 0;
+  let stockAfter = 0;
 
   await db.runTransaction(async (tx) => {
+    const freshSnap = await tx.get(itemRef);
+    currentStock = (freshSnap.data()?.["currentStock"] as number | undefined) ?? 0;
+    stockAfter = currentStock + stockDelta;
+
+    if (stockAfter < 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Insufficient stock — current: ${currentStock}, requested: ${quantity}`
+      );
+    }
+
     // Write immutable movement record
     tx.create(movementRef, {
       id: movementRef.id,
       ownerId,
       clubId,
       inventoryItemId,
-      itemName: item["name"] as string,
+      itemName,
       movementType,
       quantity,
       stockBefore: currentStock,
@@ -230,28 +236,32 @@ export const inventory_adjustStock = onCall(async (request) => {
   throwIfDuplicate(isDuplicate, operationId);
 
   const itemRef = db.collection(COLLECTIONS.OWNER_INVENTORY_ITEMS(ownerId)).doc(inventoryItemId);
-  const itemSnap = await itemRef.get();
 
-  if (!itemSnap.exists) {
+  // Pre-check existence + grab item name. Read currentStock inside the tx
+  // so the movement audit record reflects the true value at write time.
+  const preSnap = await itemRef.get();
+  if (!preSnap.exists) {
     throw new HttpsError("not-found", "Inventory item not found");
   }
+  const itemName = preSnap.data()!["name"] as string;
 
-  const item = itemSnap.data()!;
-  const currentStock = item["currentStock"] as number;
   // For adjustment: quantity IS the new absolute stock level
   const stockAfter = quantity;
-  const adjustmentDelta = stockAfter - currentStock;
-
   const now = new Date().toISOString();
   const movementRef = db.collection(COLLECTIONS.OWNER_INVENTORY_MOVEMENTS(ownerId)).doc();
+  let currentStock = 0;
 
   await db.runTransaction(async (tx) => {
+    const freshSnap = await tx.get(itemRef);
+    currentStock = (freshSnap.data()?.["currentStock"] as number | undefined) ?? 0;
+    const adjustmentDelta = stockAfter - currentStock;
+
     tx.create(movementRef, {
       id: movementRef.id,
       ownerId,
       clubId: null,
       inventoryItemId,
-      itemName: item["name"] as string,
+      itemName,
       movementType: "adjustment",
       quantity: Math.abs(adjustmentDelta),
       stockBefore: currentStock,
