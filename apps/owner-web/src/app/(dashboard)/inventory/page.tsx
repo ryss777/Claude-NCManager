@@ -318,6 +318,14 @@ export default function InventoryPage() {
   const { ownerId, clubId } = useOwnerAuthStore();
 
   const [activeTab, setActiveTab] = useState<PageTab>("stok");
+  // Counter that bumps every time the hero "Buat Transfer Baru" CTA is
+  // pressed — TransferKeluar watches it and scrolls/focuses the Tujuan card.
+  const [transferFocusKey, setTransferFocusKey] = useState(0);
+
+  function startNewTransfer() {
+    setActiveTab("transfer");
+    setTransferFocusKey((k) => k + 1);
+  }
 
   // ── Clubs (needed for transfer) — load on mount, always available now ────
   const [clubs, setClubs] = useState<Club[]>([]);
@@ -726,7 +734,7 @@ export default function InventoryPage() {
             <p className="text-xs text-slate-600 mt-0.5">Satu-satunya jalan stok masuk ke club — kirim dari gudang owner ke club tujuan.</p>
           </div>
           <button
-            onClick={() => setActiveTab("transfer")}
+            onClick={startNewTransfer}
             className="inline-flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-700 transition shadow-sm shrink-0"
           >
             + Buat Transfer Baru
@@ -1071,7 +1079,12 @@ export default function InventoryPage() {
 
       {/* ── Tab: Transfer ── */}
       {activeTab === "transfer" && (
-        <TransferPanel ownerId={ownerId} sourceClubId={clubId} clubs={clubs} />
+        <TransferPanel
+          ownerId={ownerId}
+          sourceClubId={clubId}
+          clubs={clubs}
+          keluarFocusKey={transferFocusKey}
+        />
       )}
 
       {/* ── Tab: Restok ── */}
@@ -1426,13 +1439,22 @@ function StatCard({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function TransferPanel({
-  ownerId, sourceClubId, clubs,
+  ownerId, sourceClubId, clubs, keluarFocusKey,
 }: {
   ownerId: string | undefined;
   sourceClubId: string | undefined;
   clubs: Club[];
+  keluarFocusKey?: number;
 }) {
   const [tab, setTab] = useState<"keluar" | "masuk">("keluar");
+
+  // When the parent bumps keluarFocusKey (e.g. from the hero "Buat Transfer
+  // Baru" CTA), ensure we're on the Keluar sub-tab so the focus actually
+  // lands on the Tujuan card.
+  useEffect(() => {
+    if (keluarFocusKey !== undefined && keluarFocusKey > 0) setTab("keluar");
+  }, [keluarFocusKey]);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex gap-1 bg-slate-100 rounded-xl p-1 self-start">
@@ -1452,7 +1474,7 @@ function TransferPanel({
         ))}
       </div>
       {tab === "keluar"
-        ? <TransferKeluar ownerId={ownerId} sourceClubId={sourceClubId} clubs={clubs} />
+        ? <TransferKeluar ownerId={ownerId} sourceClubId={sourceClubId} clubs={clubs} focusKey={keluarFocusKey} />
         : <TransferMasuk ownerId={ownerId} clubs={clubs} />}
     </div>
   );
@@ -1463,11 +1485,12 @@ function TransferPanel({
 // ─────────────────────────────────────────────────────────────────────────────
 
 function TransferKeluar({
-  ownerId, sourceClubId, clubs,
+  ownerId, sourceClubId, clubs, focusKey,
 }: {
   ownerId: string | undefined;
   sourceClubId: string | undefined;
   clubs: Club[];
+  focusKey: number | undefined;
 }) {
   const [destType, setDestType]       = useState<DestType>("club");
   const [destClubId, setDestClubId]   = useState("");
@@ -1477,6 +1500,12 @@ function TransferKeluar({
   const [notes, setNotes]             = useState("");
   const [search, setSearch]           = useState("");
 
+  // Refs + transient highlight for the "scroll to Tujuan" UX.
+  const tujuanRef = useRef<HTMLDivElement>(null);
+  const destClubSelectRef = useRef<HTMLSelectElement>(null);
+  const destOwnerInputRef = useRef<HTMLInputElement>(null);
+  const [tujuanHighlight, setTujuanHighlight] = useState(false);
+
   const destClubs = clubs;
 
   useEffect(() => {
@@ -1484,6 +1513,26 @@ function TransferKeluar({
       setDestClubId(destClubs[0]!.id);
     }
   }, [destType, destClubs]);
+
+  // When the parent bumps focusKey, scroll the Tujuan card into view,
+  // flash a brief highlight ring, and focus the most relevant input
+  // (club picker if multiple clubs, owner-id input for cross-owner).
+  useEffect(() => {
+    if (focusKey === undefined || focusKey === 0) return;
+    tujuanRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setTujuanHighlight(true);
+    const t = setTimeout(() => setTujuanHighlight(false), 1800);
+    // Focus the actual control after the scroll settles
+    setTimeout(() => {
+      if (destType === "owner") {
+        destOwnerInputRef.current?.focus();
+      } else if (destClubs.length > 1) {
+        destClubSelectRef.current?.focus();
+      }
+    }, 320);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
 
   const [inventory, setInventory]   = useState<WarehouseItem[]>([]);
   const [loadingInv, setLoadingInv] = useState(false);
@@ -1661,37 +1710,66 @@ function TransferKeluar({
           </div>
         )}
 
-        {/* Tujuan */}
-        <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+        {/* Tujuan — colored card, scroll/highlight target for the hero CTA */}
+        <div
+          ref={tujuanRef}
+          className={`rounded-2xl p-4 space-y-3 transition-all duration-300 bg-gradient-to-br from-blue-100 via-indigo-50 to-blue-50 ring-1 scroll-mt-4 ${
+            tujuanHighlight ? "ring-4 ring-blue-400 shadow-lg" : "ring-blue-200/70"
+          }`}
+        >
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Tujuan</p>
-            <span className="text-xs text-slate-400">dari: {sourceClubName}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-lg">🎯</span>
+              <p className="text-sm font-bold text-slate-800 uppercase tracking-wide">Tujuan</p>
+            </div>
+            <span className="text-xs text-slate-500">dari: <span className="font-medium text-slate-700">{sourceClubName}</span></span>
           </div>
           <div className="flex gap-2">
             {(["club", "owner"] as DestType[]).map((dt) => (
-              <button key={dt} onClick={() => { setDestType(dt); setDestClubId(""); setDestOwnerId(""); }}
-                className={`flex-1 py-2 rounded-lg border text-sm font-medium transition ${destType === dt ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:border-slate-300"}`}>
+              <button
+                key={dt}
+                onClick={() => { setDestType(dt); setDestClubId(""); setDestOwnerId(""); }}
+                className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-bold transition ${
+                  destType === dt
+                    ? "border-blue-600 bg-white text-blue-700 shadow-sm"
+                    : "border-transparent bg-white/60 text-slate-500 hover:bg-white hover:text-slate-700"
+                }`}
+              >
                 {dt === "club" ? "🏢 Club" : "👤 Owner Lain"}
               </button>
             ))}
           </div>
           {destType === "club" ? (
             destClubs.length === 0 ? (
-              <p className="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2">Tidak ada club lain. Tambahkan club baru terlebih dahulu.</p>
+              <p className="text-xs text-slate-500 bg-white/70 rounded-lg px-3 py-2">Tidak ada club lain. Tambahkan club baru terlebih dahulu.</p>
             ) : destClubs.length === 1 ? (
-              <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5">
-                <span className="text-base">🏢</span>
-                <div className="flex-1 min-w-0"><p className="text-sm font-semibold text-blue-800">{destClubs[0]!.name}</p><p className="text-xs text-blue-500">Club tujuan</p></div>
+              <div className="flex items-center gap-2 bg-white border-2 border-blue-300 rounded-xl px-3 py-2.5">
+                <span className="text-lg">🏢</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-blue-900">{destClubs[0]!.name}</p>
+                  <p className="text-xs text-blue-500">Club tujuan</p>
+                </div>
               </div>
             ) : (
-              <select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" value={destClubId} onChange={(e) => setDestClubId(e.target.value)}>
+              <select
+                ref={destClubSelectRef}
+                className="w-full border-2 border-blue-300 rounded-xl px-3 py-2.5 text-sm font-semibold bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                value={destClubId}
+                onChange={(e) => setDestClubId(e.target.value)}
+              >
                 {destClubs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             )
           ) : (
             <div>
-              <input className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Owner ID tujuan" value={destOwnerId} onChange={(e) => setDestOwnerId(e.target.value)} />
-              <p className="text-xs text-slate-400 mt-1.5">Transfer akan menunggu konfirmasi penerima.</p>
+              <input
+                ref={destOwnerInputRef}
+                className="w-full border-2 border-blue-300 rounded-xl px-3 py-2.5 text-sm font-semibold bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:font-normal placeholder:text-slate-400"
+                placeholder="Owner ID tujuan"
+                value={destOwnerId}
+                onChange={(e) => setDestOwnerId(e.target.value)}
+              />
+              <p className="text-xs text-slate-500 mt-1.5">Transfer akan menunggu konfirmasi penerima.</p>
             </div>
           )}
         </div>
