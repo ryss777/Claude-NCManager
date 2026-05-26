@@ -143,7 +143,7 @@ function PlanFormDialog({
           <label className="block">
             <span className="text-xs text-slate-500 font-medium">Nama Paket *</span>
             <input className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Contoh: Member Gold 10x" value={name} onChange={(e) => setName(e.target.value)} />
+              placeholder="Contoh: Membership Gold 10x" value={name} onChange={(e) => setName(e.target.value)} />
           </label>
           {planType === "regular" ? (
             <>
@@ -595,7 +595,7 @@ export default function CustomersPage() {
       {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Pelanggan &amp; Member</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Pelanggan dan Membership</h1>
           <p className="text-sm text-slate-400 mt-0.5">
             {customers.length} pelanggan · {activeMembershipCount} membership aktif
           </p>
@@ -627,7 +627,7 @@ export default function CustomersPage() {
       <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
         {([
           { key: "customers",  label: "👥 Pelanggan" },
-          { key: "membership", label: "🎫 Paket Member" },
+          { key: "membership", label: "Paket Membership" },
         ] as { key: MainTab; label: string }[]).map(({ key, label }) => (
           <button key={key} onClick={() => setMainTab(key)}
             className={`px-5 py-2 rounded-lg text-sm font-semibold transition ${mainTab === key ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}>
@@ -859,18 +859,18 @@ export default function CustomersPage() {
                   </div>
                 </div>
                 <div className="mb-5">
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Member aktif di paket ini</p>
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Membership aktif di paket ini</p>
                   {confirmDialog.loadingCustomers ? (
                     <p className="text-sm text-slate-400 py-3 text-center">Memuat…</p>
                   ) : confirmDialog.customers.length === 0 ? (
-                    <div className="bg-green-50 rounded-xl px-4 py-3"><p className="text-sm text-green-700 font-medium">Tidak ada member yang terdampak.</p></div>
+                    <div className="bg-green-50 rounded-xl px-4 py-3"><p className="text-sm text-green-700 font-medium">Tidak ada pelanggan yang terdampak.</p></div>
                   ) : (
                     <div className="space-y-2">
                       <div className={`rounded-xl px-4 py-3 ${confirmDialog.type === "delete" ? "bg-red-50" : "bg-amber-50"}`}>
                         <p className={`text-sm font-semibold ${confirmDialog.type === "delete" ? "text-red-700" : "text-amber-700"}`}>
                           {confirmDialog.type === "delete"
-                            ? `Membership ${confirmDialog.customers.length} member akan langsung dibatalkan.`
-                            : "Paket tidak bisa dibeli lagi. Sisa kunjungan member tetap berlaku."}
+                            ? `Membership ${confirmDialog.customers.length} pelanggan akan langsung dibatalkan.`
+                            : "Paket tidak bisa dibeli lagi. Sisa kunjungan pelanggan tetap berlaku."}
                         </p>
                       </div>
                       <div className={`border rounded-xl overflow-hidden divide-y divide-slate-100 max-h-40 overflow-y-auto ${confirmDialog.type === "delete" ? "border-red-100" : "border-amber-100"}`}>

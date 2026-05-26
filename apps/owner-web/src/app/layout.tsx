@@ -3,7 +3,7 @@ import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
 
 export const metadata: Metadata = {
-  title: "NC Manager — Owner Dashboard",
+  title: "NC Manager - Owner Dashboard",
   description: "Kelola klub nutrisi Anda",
 };
 

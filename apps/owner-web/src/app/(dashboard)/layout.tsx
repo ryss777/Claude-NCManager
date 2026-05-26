@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useOwnerAuthStore } from "@/store/auth.store";
-import { Sidebar } from "@/components/Sidebar";
+import { MobileTopBar, Sidebar } from "@/components/Sidebar";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useOwnerAuthStore();
@@ -26,9 +26,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   if (!isAuthenticated) return null;
 
   return (
-    <div className="flex min-h-screen">
+    <div className="min-h-screen lg:flex">
+      <MobileTopBar />
       <Sidebar />
-      <main className="flex-1 p-8 overflow-auto">{children}</main>
+      <main className="min-w-0 flex-1 overflow-auto p-4 sm:p-6 lg:p-8">{children}</main>
     </div>
   );
 }
