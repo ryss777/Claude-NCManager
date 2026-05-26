@@ -12,9 +12,6 @@ interface Stats {
   customers: number;
   activeMemberships: number;
   expiringSoon: number;
-  operators: number;
-  plans: number;
-  items: number;
   lowStock: number;
   activeDebts: number;
 }
@@ -42,10 +39,24 @@ interface LowStockItem {
   minimumStock: number;
 }
 
+interface ExpiringMember {
+  id: string;
+  customerId: string;
+  customerName: string;
+  expiresAt: string;
+  daysLeft: number;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const fmt = (n: number) =>
   new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
+
+function greeting(name: string) {
+  const h = new Date().getHours();
+  const greet = h < 11 ? "Selamat pagi" : h < 15 ? "Selamat siang" : h < 19 ? "Selamat sore" : "Selamat malam";
+  return `${greet}, ${name}`;
+}
 
 function todayLabel() {
   return new Date().toLocaleDateString("id-ID", {
@@ -53,16 +64,23 @@ function todayLabel() {
   });
 }
 
+function daysFromNow(iso: string) {
+  return Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000));
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function DashboardHome() {
   const { displayName, ownerId, clubId } = useOwnerAuthStore();
-  const [stats, setStats]             = useState<Stats | null>(null);
-  const [recentTx, setRecentTx]       = useState<RecentTx[]>([]);
-  const [lowItems, setLowItems]       = useState<LowStockItem[]>([]);
-  const [activeComps, setActiveComps] = useState<ActiveCompetition[]>([]);
-  const [todayRevenue, setTodayRevenue] = useState(0);
-  const [loading, setLoading]         = useState(true);
+
+  const [stats, setStats]                 = useState<Stats | null>(null);
+  const [recentTx, setRecentTx]           = useState<RecentTx[]>([]);
+  const [lowItems, setLowItems]           = useState<LowStockItem[]>([]);
+  const [expiringMembers, setExpiringMembers] = useState<ExpiringMember[]>([]);
+  const [activeComps, setActiveComps]     = useState<ActiveCompetition[]>([]);
+  const [todayRevenue, setTodayRevenue]   = useState(0);
+  const [todayTxCount, setTodayTxCount]   = useState(0);
+  const [loading, setLoading]             = useState(true);
 
   useEffect(() => {
     if (ownerId && clubId) loadAll();
@@ -75,18 +93,15 @@ export default function DashboardHome() {
       const db   = firebaseDb();
       const base = `owners/${ownerId}/clubs/${clubId}`;
 
-      const soonIso = new Date(Date.now() + 7 * 86_400_000).toISOString();
-
+      const soonIso    = new Date(Date.now() + 7 * 86_400_000).toISOString();
       const todayStart = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
       const todayEnd   = `${new Date().toISOString().slice(0, 10)}T23:59:59.999Z`;
 
-      const [ops, plans, items, customers, memberships, debts, txSnap, compSnap, journalSnap] = await Promise.all([
-        getDocs(query(collection(db, `${base}/operators`), where("isActive", "==", true))),
-        getDocs(query(collection(db, `${base}/membershipPlans`), where("isActive", "==", true))),
+      const [items, customers, memberships, debts, txSnap, compSnap, journalSnap, todayTxSnap] = await Promise.all([
         getDocs(collection(db, `${base}/inventoryItems`)),
         getDocs(collection(db, `${base}/customers`)),
         getDocs(query(collection(db, `${base}/memberships`), where("status", "==", "active"))),
-        getDocs(query(collection(db, `${base}/debts`), where("status", "in", ["unpaid", "partial"]))),
+        getDocs(query(collection(db, `${base}/debts`), where("status", "in", ["unpaid", "outstanding", "partial"]))),
         getDocs(query(collection(db, `${base}/transactions`), orderBy("createdAt", "desc"), limit(6))),
         getDocs(collection(db, `${base}/competitions`)),
         getDocs(query(
@@ -94,9 +109,14 @@ export default function DashboardHome() {
           where("createdAt", ">=", todayStart),
           where("createdAt", "<=", todayEnd),
         )),
+        getDocs(query(
+          collection(db, `${base}/transactions`),
+          where("createdAt", ">=", todayStart),
+          where("createdAt", "<=", todayEnd),
+        )),
       ]);
 
-      // Sum today's revenue from journal
+      // Today's revenue from journal credits
       const REVENUE_CREDITS = new Set(["SALES_REVENUE", "MEMBERSHIP_REVENUE", "4001", "4002"]);
       let rev = 0;
       journalSnap.docs.forEach((d) => {
@@ -106,24 +126,38 @@ export default function DashboardHome() {
         }
       });
       setTodayRevenue(rev);
+      setTodayTxCount(todayTxSnap.size);
 
+      // Low stock items
       const low = items.docs.filter((d) => {
         const data = d.data();
         return (data["minimumStock"] ?? 0) > 0 && (data["currentStock"] ?? 0) <= (data["minimumStock"] ?? 0);
       });
 
-      const expiring = memberships.docs.filter((d) => {
-        const exp = d.data()["expiresAt"] as string | null;
-        return exp && exp <= soonIso;
-      }).length;
+      // Expiring memberships (with names)
+      const custMap = new Map<string, string>(
+        customers.docs.map((d) => [d.id, (d.data()["displayName"] as string) ?? d.id])
+      );
+      const expiringList: ExpiringMember[] = [];
+      memberships.docs.forEach((d) => {
+        const data = d.data();
+        const exp = data["expiresAt"] as string | null;
+        if (exp && exp <= soonIso) {
+          expiringList.push({
+            id: d.id,
+            customerId: data["customerId"] as string,
+            customerName: custMap.get(data["customerId"] as string) ?? "—",
+            expiresAt: exp,
+            daysLeft: daysFromNow(exp),
+          });
+        }
+      });
+      expiringList.sort((a, b) => a.daysLeft - b.daysLeft);
 
       setStats({
         customers: customers.size,
         activeMemberships: memberships.size,
-        expiringSoon: expiring,
-        operators: ops.size,
-        plans: plans.size,
-        items: items.size,
+        expiringSoon: expiringList.length,
         lowStock: low.length,
         activeDebts: debts.size,
       });
@@ -134,6 +168,8 @@ export default function DashboardHome() {
         currentStock: d.data()["currentStock"] as number,
         minimumStock: d.data()["minimumStock"] as number,
       })));
+
+      setExpiringMembers(expiringList.slice(0, 5));
 
       setRecentTx(txSnap.docs.map((d) => ({
         id: d.id,
@@ -148,7 +184,6 @@ export default function DashboardHome() {
       setActiveComps(
         compSnap.docs
           .filter((d) => {
-            // Trust stored "finished" status — handles force-ended where endDate === today
             if ((d.data()["status"] as string | undefined) === "finished") return false;
             const s = d.data()["startDate"] as string;
             const e = d.data()["endDate"] as string;
@@ -169,314 +204,273 @@ export default function DashboardHome() {
 
   const fname = displayName?.split(" ")[0] ?? "Owner";
 
+  // ── Action items: things that need owner attention today ────────────────────
+  type ActionItem = {
+    key: string;
+    icon: string;
+    title: string;
+    detail: string;
+    href: string;
+    severity: "high" | "med" | "low";
+  };
+  const actions: ActionItem[] = [];
+  if ((stats?.lowStock ?? 0) > 0) {
+    actions.push({
+      key: "low-stock", icon: "📦",
+      title: `${stats!.lowStock} stok menipis`,
+      detail: lowItems[0] ? `${lowItems[0].name}, ${lowItems[0].currentStock}/${lowItems[0].minimumStock}` : "Cek inventory",
+      href: "/inventory", severity: "high",
+    });
+  }
+  if ((stats?.activeDebts ?? 0) > 0) {
+    actions.push({
+      key: "debts", icon: "💰",
+      title: `${stats!.activeDebts} utang aktif`,
+      detail: "Tagihan belum lunas",
+      href: "/transactions", severity: "high",
+    });
+  }
+  if ((stats?.expiringSoon ?? 0) > 0) {
+    actions.push({
+      key: "expiring", icon: "⏰",
+      title: `${stats!.expiringSoon} member akan expired`,
+      detail: expiringMembers[0]
+        ? `${expiringMembers[0].customerName}, ${expiringMembers[0].daysLeft}h lagi`
+        : "Dalam 7 hari",
+      href: "/customers", severity: "med",
+    });
+  }
+  if (activeComps.length > 0) {
+    const c = activeComps[0]!;
+    const dl = daysFromNow(c.endDate);
+    actions.push({
+      key: "comp", icon: "🏆",
+      title: activeComps.length === 1 ? c.name : `${activeComps.length} lomba berjalan`,
+      detail: activeComps.length === 1
+        ? `${c.participantCount} peserta · ${dl}h lagi`
+        : "Pantau progress",
+      href: "/lomba", severity: dl <= 3 ? "high" : "low",
+    });
+  }
+
+  const severityStyle: Record<ActionItem["severity"], { bg: string; ring: string; text: string }> = {
+    high: { bg: "bg-red-50",    ring: "ring-red-100",    text: "text-red-700" },
+    med:  { bg: "bg-amber-50",  ring: "ring-amber-100",  text: "text-amber-700" },
+    low:  { bg: "bg-blue-50",   ring: "ring-blue-100",   text: "text-blue-700" },
+  };
+
+  // ── Quick access — only the truly common destinations ───────────────────────
+  const quickLinks = [
+    { href: "/pos",          icon: "🖥️", label: "Kasir" },
+    { href: "/customers",    icon: "🧑‍🤝‍🧑", label: "Pelanggan" },
+    { href: "/transfer",     icon: "↔️", label: "Transfer" },
+    { href: "/inventory",    icon: "📦", label: "Stok" },
+    { href: "/transactions", icon: "🧾", label: "Transaksi" },
+    { href: "/reports",      icon: "📊", label: "Laporan" },
+  ];
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-7">
+    <div className="space-y-6">
 
-      {/* ── Greeting header ───────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900">Halo, {fname} 👋</h2>
-          <p className="text-sm text-slate-400 mt-0.5">{todayLabel()}</p>
+      {/* ── Hero: greeting + headline KPI strip ─────────────────────────────── */}
+      <div className="rounded-3xl bg-gradient-to-br from-blue-100 via-blue-50 to-indigo-100 ring-1 ring-blue-200/60 px-7 py-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">{greeting(fname)}</h1>
+            <p className="text-sm text-slate-500 mt-1">{todayLabel()}</p>
+          </div>
+          <Link
+            href="/pos"
+            className="inline-flex items-center gap-2 bg-slate-900 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-700 transition shadow-sm"
+          >
+            🖥️ Buka Kasir
+          </Link>
         </div>
-        <Link
-          href="/pos"
-          className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2.5 rounded-xl text-sm font-semibold hover:bg-slate-700 transition"
-        >
-          🖥️ Buka Kasir
-        </Link>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
+          <HeroStat
+            label="Pendapatan Hari Ini"
+            value={loading ? null : fmt(todayRevenue)}
+          />
+          <HeroStat
+            label="Transaksi Hari Ini"
+            value={loading ? null : String(todayTxCount)}
+            sub={todayTxCount > 0 ? "sudah masuk" : "belum ada"}
+          />
+          <HeroStat
+            label="Member Aktif"
+            value={loading ? null : String(stats?.activeMemberships ?? 0)}
+            sub={`dari ${stats?.customers ?? 0} pelanggan`}
+          />
+          <HeroStat
+            label="Perlu Tindakan"
+            value={loading ? null : String(actions.length)}
+            sub={actions.length === 0 ? "semua aman" : "lihat ringkasan ↓"}
+            highlight={actions.length > 0}
+          />
+        </div>
       </div>
 
-      {/* ── KPI strip ────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      {/* ── Two-column body ────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-        {/* Pendapatan hari ini */}
-        <Link href="/reports"
-          className="bg-indigo-50 rounded-2xl p-4 hover:bg-indigo-100 transition sm:col-span-1"
-        >
-          <p className="text-xs font-semibold text-indigo-600 mb-2">Pendapatan Hari Ini</p>
-          <p className="text-xl font-bold text-indigo-700 leading-none">
-            {loading ? <span className="text-slate-300">…</span> : fmt(todayRevenue)}
-          </p>
-          <p className="text-xs text-indigo-400 mt-1.5">dari jurnal keuangan</p>
-        </Link>
+        {/* Left: Action items + quick access */}
+        <div className="lg:col-span-3 space-y-6">
 
-        {/* Member aktif */}
-        <Link href="/customers"
-          className="bg-green-50 rounded-2xl p-4 hover:bg-green-100 transition group"
-        >
-          <p className="text-xs font-semibold text-green-600 mb-2">Member Aktif</p>
-          <p className="text-3xl font-bold text-green-700 leading-none">
-            {loading ? <span className="text-slate-300">…</span> : (stats?.activeMemberships ?? 0)}
-          </p>
-          <p className="text-xs text-green-500 mt-1.5">
-            dari {loading ? "…" : (stats?.customers ?? 0)} pelanggan
-          </p>
-        </Link>
+          {/* Action items */}
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-widest">⚡ Yang Perlu Tindakan</h2>
+              {!loading && actions.length > 0 && (
+                <span className="text-xs text-slate-400">{actions.length} item</span>
+              )}
+            </div>
 
-        {/* Akan expired */}
-        {(() => {
-          const n = stats?.expiringSoon ?? 0;
-          const hot = n > 0;
-          return (
-            <Link href="/customers"
-              className={`rounded-2xl p-4 transition ${hot ? "bg-amber-50 hover:bg-amber-100" : "bg-slate-50 hover:bg-slate-100"}`}
-            >
-              <p className={`text-xs font-semibold mb-2 ${hot ? "text-amber-600" : "text-slate-400"}`}>Akan Expired</p>
-              <p className={`text-3xl font-bold leading-none ${hot ? "text-amber-600" : "text-slate-300"}`}>
-                {loading ? <span className="text-slate-300">…</span> : n}
-              </p>
-              <p className={`text-xs mt-1.5 ${hot ? "text-amber-500" : "text-slate-400"}`}>
-                dalam 7 hari ke depan
-              </p>
-            </Link>
-          );
-        })()}
-
-        {/* Utang aktif */}
-        {(() => {
-          const n = stats?.activeDebts ?? 0;
-          const hot = n > 0;
-          return (
-            <Link href="/debts"
-              className={`rounded-2xl p-4 transition ${hot ? "bg-red-50 hover:bg-red-100" : "bg-slate-50 hover:bg-slate-100"}`}
-            >
-              <p className={`text-xs font-semibold mb-2 ${hot ? "text-red-500" : "text-slate-400"}`}>Utang Aktif</p>
-              <p className={`text-3xl font-bold leading-none ${hot ? "text-red-600" : "text-slate-300"}`}>
-                {loading ? <span className="text-slate-300">…</span> : n}
-              </p>
-              <p className={`text-xs mt-1.5 ${hot ? "text-red-400" : "text-slate-400"}`}>
-                tagihan belum lunas
-              </p>
-            </Link>
-          );
-        })()}
-
-        {/* Stok menipis */}
-        {(() => {
-          const n = stats?.lowStock ?? 0;
-          const hot = n > 0;
-          return (
-            <Link href="/inventory"
-              className={`rounded-2xl p-4 transition ${hot ? "bg-orange-50 hover:bg-orange-100" : "bg-slate-50 hover:bg-slate-100"}`}
-            >
-              <p className={`text-xs font-semibold mb-2 ${hot ? "text-orange-500" : "text-slate-400"}`}>Stok Menipis</p>
-              <p className={`text-3xl font-bold leading-none ${hot ? "text-orange-600" : "text-slate-300"}`}>
-                {loading ? <span className="text-slate-300">…</span> : n}
-              </p>
-              <p className={`text-xs mt-1.5 ${hot ? "text-orange-400" : "text-slate-400"}`}>
-                item di bawah minimum
-              </p>
-            </Link>
-          );
-        })()}
-      </div>
-
-      {/* ── Main content ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-
-        {/* Left: Quick actions (3 cols) */}
-        <div className="lg:col-span-3 space-y-3">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Akses Cepat</p>
-
-          {/* Primary actions */}
-          {(() => {
-            const hasLomba = !loading && activeComps.length > 0;
-            const primaryItems = [
-              { href: "/customers", icon: "🧑‍🤝‍🧑", label: "Pelanggan",       desc: "Daftar & kelola membership",                         cls: "bg-blue-600 text-white hover:bg-blue-700" },
-              { href: "/transfer",  icon: "↔️",        label: "Transfer Produk", desc: "Kirim dari gudang ke club",                           cls: "bg-teal-600 text-white hover:bg-teal-700" },
-              ...(hasLomba ? [{
-                href:  "/lomba",
-                icon:  "🏆",
-                label: "Lomba Berjalan",
-                desc:  `${activeComps.length} lomba aktif sekarang`,
-                cls:   "bg-amber-500 text-white hover:bg-amber-600",
-              }] : []),
-            ];
-            return (
-              <div className={`grid gap-3 ${hasLomba ? "grid-cols-3" : "grid-cols-2"}`}>
-                {primaryItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`flex flex-col gap-1.5 rounded-2xl p-5 transition ${item.cls}`}
-                  >
-                    <span className="text-2xl">{item.icon}</span>
-                    <span className="font-bold text-sm leading-tight">{item.label}</span>
-                    <span className="text-xs opacity-75">{item.desc}</span>
-                  </Link>
+            {loading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-16 bg-slate-100 rounded-2xl animate-pulse" />
                 ))}
               </div>
-            );
-          })()}
-
-          {/* Secondary actions */}
-          <div className="grid grid-cols-3 gap-3">
-            {([
-              { href: "/customers",    icon: "⭐", label: "Paket Member",  desc: "Kelola paket" },
-              { href: "/inventory",    icon: "📦", label: "Produk & Stok", desc: "Stok & harga jual" },
-              { href: "/transactions", icon: "🧾", label: "Transaksi",     desc: "Riwayat penjualan" },
-              { href: "/debts",        icon: "💰", label: "Utang Piutang", desc: "Kelola tagihan" },
-              { href: "/finance",      icon: "📈", label: "Keuangan",      desc: "Jurnal & shift" },
-              { href: "/reports",      icon: "📊", label: "Laporan",       desc: "Grafik performa" },
-            ] as const).map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="flex flex-col gap-0.5 rounded-2xl border border-slate-200 bg-white p-4 hover:border-slate-300 hover:shadow-sm transition"
-              >
-                <span className="text-xl mb-0.5">{item.icon}</span>
-                <span className="font-semibold text-sm text-slate-800">{item.label}</span>
-                <span className="text-xs text-slate-400">{item.desc}</span>
-              </Link>
-            ))}
-          </div>
-
-          {/* Management chips */}
-          <div className="flex gap-2 flex-wrap">
-            {([
-              { href: "/operators", icon: "👤", label: "Operator" },
-              { href: "/devices",   icon: "📱", label: "Device" },
-              { href: "/club",      icon: "🏋️", label: "Manajemen Club" },
-              { href: "/settings",  icon: "⚙️", label: "Pengaturan" },
-            ] as const).map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium hover:bg-slate-200 transition"
-              >
-                <span>{item.icon}</span>
-                {item.label}
-              </Link>
-            ))}
-          </div>
-        </div>
-
-        {/* Right: Recent activity (2 cols) */}
-        <div className="lg:col-span-2 space-y-4">
-
-          {/* Recent transactions */}
-          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-              <h3 className="text-sm font-bold text-slate-700">Transaksi Terbaru</h3>
-              <Link href="/transactions" className="text-xs text-blue-600 hover:underline font-medium">
-                Semua →
-              </Link>
-            </div>
-            {loading ? (
-              <div className="px-4 py-8 text-center">
-                <div className="w-6 h-6 border-2 border-slate-200 border-t-blue-500 rounded-full animate-spin mx-auto" />
-              </div>
-            ) : recentTx.length === 0 ? (
-              <div className="px-4 py-8 text-center">
-                <p className="text-2xl mb-1.5">🧾</p>
-                <p className="text-sm text-slate-400">Belum ada transaksi</p>
+            ) : actions.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center">
+                <div className="text-4xl mb-2">✅</div>
+                <p className="text-sm font-semibold text-slate-700">Semua beres hari ini</p>
+                <p className="text-xs text-slate-400 mt-1">Tidak ada hal mendesak yang perlu perhatian</p>
               </div>
             ) : (
-              <div className="divide-y divide-slate-100">
-                {recentTx.map((tx) => {
-                  const txItems = tx.items ?? [];
-                  const label = txItems.length === 0
-                    ? "—"
-                    : txItems.length === 1
-                      ? `${txItems[0]!.productName} ×${txItems[0]!.quantity}`
-                      : `${txItems[0]!.productName} +${txItems.length - 1} lainnya`;
-                  const reversed = tx.status === "reversed";
+              <div className="space-y-2">
+                {actions.map((a) => {
+                  const s = severityStyle[a.severity];
                   return (
-                    <div key={tx.id} className="flex items-center gap-3 px-4 py-3">
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs shrink-0 ${
-                        reversed ? "bg-red-100 text-red-500" :
-                        tx.createdBy === "owner" ? "bg-slate-100 text-slate-500" :
-                        "bg-blue-50 text-blue-500"
-                      }`}>
-                        {reversed ? "↩" : tx.createdBy === "owner" ? "👤" : "🖥️"}
-                      </div>
+                    <Link
+                      key={a.key}
+                      href={a.href}
+                      className={`flex items-center gap-4 ${s.bg} ring-1 ${s.ring} rounded-2xl px-5 py-4 hover:brightness-95 transition`}
+                    >
+                      <div className="text-2xl shrink-0">{a.icon}</div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-slate-800 truncate">{label}</p>
-                        <p className="text-xs text-slate-400">{tx.createdAt?.slice(0, 16).replace("T", " ")}</p>
+                        <p className={`text-sm font-bold ${s.text} truncate`}>{a.title}</p>
+                        <p className="text-xs text-slate-500 truncate mt-0.5">{a.detail}</p>
                       </div>
-                      <p className={`text-xs font-bold shrink-0 ${reversed ? "text-slate-300 line-through" : "text-slate-800"}`}>
-                        {fmt(tx.total)}
-                      </p>
-                    </div>
+                      <span className="text-slate-400 text-lg shrink-0">›</span>
+                    </Link>
                   );
                 })}
               </div>
             )}
-          </div>
+          </section>
 
-          {/* Low stock alert */}
-          {!loading && (stats?.lowStock ?? 0) > 0 && (
-            <div className="bg-orange-50 rounded-2xl border border-orange-200 overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-orange-100">
-                <h3 className="text-sm font-bold text-orange-700">⚠️ Stok Menipis</h3>
-                <Link href="/inventory" className="text-xs text-orange-600 hover:underline font-medium">
-                  Kelola →
+          {/* Quick access */}
+          <section>
+            <h2 className="text-sm font-bold text-slate-700 uppercase tracking-widest mb-3">Akses Cepat</h2>
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+              {quickLinks.map((l) => (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className="flex flex-col items-center justify-center gap-1.5 bg-white border border-slate-200 rounded-2xl py-4 hover:border-slate-300 hover:shadow-sm transition"
+                >
+                  <span className="text-2xl">{l.icon}</span>
+                  <span className="text-xs font-semibold text-slate-700">{l.label}</span>
                 </Link>
-              </div>
-              <div className="divide-y divide-orange-100">
-                {lowItems.map((item) => (
-                  <div key={item.id} className="flex items-center justify-between px-4 py-2.5">
-                    <p className="text-xs font-medium text-slate-800 truncate">{item.name}</p>
-                    <span className="text-xs font-bold text-orange-600 ml-3 shrink-0">
-                      {item.currentStock} / {item.minimumStock} min
-                    </span>
-                  </div>
-                ))}
-              </div>
+              ))}
             </div>
-          )}
+          </section>
+        </div>
 
-          {/* Active competitions widget */}
-          {!loading && activeComps.length > 0 && (
-            <div className="bg-green-50 rounded-2xl border border-green-200 overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-green-100">
-                <h3 className="text-sm font-bold text-green-700">🏆 Lomba Berjalan</h3>
-                <Link href="/lomba" className="text-xs text-green-600 hover:underline font-medium">
-                  Kelola →
-                </Link>
-              </div>
-              <div className="divide-y divide-green-100">
-                {activeComps.map((comp) => {
-                  const today = new Date().toISOString().slice(0, 10);
-                  const daysLeft = Math.max(
-                    0,
-                    Math.ceil((new Date(comp.endDate).getTime() - new Date(today).getTime()) / 86_400_000)
-                  );
-                  return (
-                    <div key={comp.id} className="flex items-center justify-between px-4 py-2.5">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-slate-800 truncate">{comp.name}</p>
-                        <p className="text-xs text-slate-400">{comp.participantCount} peserta</p>
+        {/* Right: Recent activity */}
+        <div className="lg:col-span-2">
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-widest">📊 Aktivitas Terbaru</h2>
+              <Link href="/transactions" className="text-xs text-blue-600 hover:underline font-medium">
+                Lihat semua →
+              </Link>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+              {loading ? (
+                <div className="px-4 py-2">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="flex items-center gap-3 py-2.5">
+                      <div className="w-9 h-9 bg-slate-100 rounded-xl animate-pulse" />
+                      <div className="flex-1 space-y-1.5">
+                        <div className="h-3 bg-slate-100 rounded animate-pulse w-3/4" />
+                        <div className="h-2 bg-slate-100 rounded animate-pulse w-1/2" />
                       </div>
-                      <span className={`text-xs font-bold ml-3 shrink-0 ${daysLeft <= 3 ? "text-red-500" : "text-green-600"}`}>
-                        {daysLeft}h lagi
-                      </span>
                     </div>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              ) : recentTx.length === 0 ? (
+                <div className="px-5 py-10 text-center">
+                  <p className="text-3xl mb-2">🧾</p>
+                  <p className="text-sm font-medium text-slate-600">Belum ada transaksi</p>
+                  <Link
+                    href="/pos"
+                    className="inline-block mt-3 text-xs font-semibold text-blue-600 hover:underline"
+                  >
+                    Buka kasir untuk mulai →
+                  </Link>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {recentTx.map((tx) => {
+                    const txItems = tx.items ?? [];
+                    const label = txItems.length === 0
+                      ? "—"
+                      : txItems.length === 1
+                        ? `${txItems[0]!.productName} ×${txItems[0]!.quantity}`
+                        : `${txItems[0]!.productName} +${txItems.length - 1} lainnya`;
+                    const reversed = tx.status === "reversed";
+                    return (
+                      <div key={tx.id} className="flex items-center gap-3 px-4 py-3">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm shrink-0 ${
+                          reversed ? "bg-red-50 text-red-500" :
+                          tx.createdBy === "owner" ? "bg-slate-100 text-slate-600" :
+                          "bg-blue-50 text-blue-600"
+                        }`}>
+                          {reversed ? "↩" : tx.createdBy === "owner" ? "👤" : "🖥️"}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-slate-800 truncate">{label}</p>
+                          <p className="text-xs text-slate-400 mt-0.5">{tx.createdAt?.slice(11, 16)}</p>
+                        </div>
+                        <p className={`text-sm font-bold shrink-0 ${reversed ? "text-slate-300 line-through" : "text-slate-900"}`}>
+                          {fmt(tx.total)}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
-
-          {/* Mini stats */}
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { label: "Pelanggan",  value: stats?.customers,  color: "text-slate-700" },
-              { label: "Paket Aktif", value: stats?.plans,     color: "text-purple-600" },
-              { label: "Operator",   value: stats?.operators,  color: "text-violet-600" },
-            ].map((s) => (
-              <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-3 text-center">
-                <p className={`text-xl font-bold ${s.color}`}>
-                  {loading ? <span className="text-slate-300">…</span> : (s.value ?? 0)}
-                </p>
-                <p className="text-xs text-slate-400 mt-0.5">{s.label}</p>
-              </div>
-            ))}
-          </div>
+          </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function HeroStat({
+  label, value, sub, highlight,
+}: {
+  label: string;
+  value: string | null;
+  sub?: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</p>
+      <p className={`text-2xl font-bold mt-1 tabular-nums ${highlight ? "text-amber-600" : "text-slate-900"}`}>
+        {value === null ? <span className="inline-block w-20 h-7 bg-slate-200/70 rounded animate-pulse" /> : value}
+      </p>
+      {sub && <p className="text-xs text-slate-500 mt-0.5">{sub}</p>}
     </div>
   );
 }
