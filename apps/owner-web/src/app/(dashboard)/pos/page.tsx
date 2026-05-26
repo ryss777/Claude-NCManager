@@ -232,7 +232,11 @@ export default function OwnerPosPage() {
   const [memFeedback, setMemFeedback] = useState<{ type: "ok" | "err" | "info"; msg: string } | undefined>();
   const memAmountRef = useRef<HTMLInputElement>(null);
 
-  // Locker-specific: number of sessions to purchase upfront
+  // Locker-specific:
+  //  - "bundle": operator pays upfront for N sessions (prabayar) — uses memLockerSessions
+  //  - "daily":  customer is registered as a locker member with no upfront fee;
+  //              they pay per visit later via locker_recordVisit (paymentType: "cash")
+  const [memLockerMode, setMemLockerMode]     = useState<"bundle" | "daily">("bundle");
   const [memLockerSessions, setMemLockerSessions] = useState("10");
 
   // ── Quick-create customer ──────────────────────────────────────────────────
@@ -249,6 +253,14 @@ export default function OwnerPosPage() {
   const [lockSelectedMember, setLockSelectedMember] = useState<ActiveLockerMember | null>(null);
   const [lockGuestCount, setLockGuestCount]       = useState(1);
   const [lockPaymentType, setLockPaymentType]     = useState<"credits" | "cash">("credits");
+
+  // Daily-mode members have blendingCredits === 0 — they always pay cash per
+  // visit. Default the payment type to "cash" when such a member is selected
+  // so operator doesn't have to click. Members with credits keep the default.
+  useEffect(() => {
+    if (!lockSelectedMember) return;
+    setLockPaymentType(lockSelectedMember.blendingCredits > 0 ? "credits" : "cash");
+  }, [lockSelectedMember]);
   const [lockChecking, setLockChecking]           = useState(false);
   const [lockFeedback, setLockFeedback]           = useState<{ type: "ok" | "err"; msg: string } | undefined>();
 
@@ -315,15 +327,30 @@ export default function OwnerPosPage() {
 
   const memSelectedPlan  = plans.find((p) => p.id === memSelectedPlanId) ?? null;
   const isLockerPlan     = memSelectedPlan?.planType === "locker";
-  // For locker: price = sessions × fee; for regular: plan price
+  // Locker pricing:
+  //  - bundle mode: total = sessions × per-session fee, charged at activation
+  //  - daily mode:  price 0 at activation, customer pays per visit later
   const memLockerSessionsNum = Math.max(1, parseInt(memLockerSessions, 10) || 1);
   const memPlanPrice = isLockerPlan
-    ? memLockerSessionsNum * (memSelectedPlan?.blendingFeePerSession ?? 0)
+    ? (memLockerMode === "bundle"
+        ? memLockerSessionsNum * (memSelectedPlan?.blendingFeePerSession ?? 0)
+        : 0)
     : (memSelectedPlan?.price ?? 0);
   const memPaid          = parseFloat(memAmountPaid) || 0;
   const memChange        = memPaid - memPlanPrice;
   const memRemainingDebt = memAmountPaid !== "" && memPaid < memPlanPrice && memPlanPrice > 0
     ? memPlanPrice - memPaid : 0;
+
+  // When operator picks a locker plan, default the mode based on the plan's
+  // own visitQuota: a plan with quota 0 was created as a daily plan,
+  // otherwise default to bundle prabayar.
+  useEffect(() => {
+    if (!memSelectedPlan || memSelectedPlan.planType !== "locker") return;
+    const quota = memSelectedPlan.visitQuota ?? 0;
+    setMemLockerMode(quota > 0 ? "bundle" : "daily");
+    if (quota > 0) setMemLockerSessions(String(quota));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [memSelectedPlanId]);
 
   // ── Cart actions ───────────────────────────────────────────────────────────
   function reprice(tier: CustomerTier, currentCart: CartItem[]): CartItem[] {
@@ -470,12 +497,18 @@ export default function OwnerPosPage() {
           transactionId: uuidv4(),
           ...(memAmountPaid !== "" ? { amountPaid: parseFloat(memAmountPaid) } : {}),
           paymentMethod: memPaymentMethod,
-          // Locker: pass session count so the CF calculates the total and records a transaction
-          ...(isLockerPlan && memLockerSessionsNum > 0 ? { lockerSessions: memLockerSessionsNum } : {}),
+          // Locker bundle: send session count so the CF computes total + records
+          //                a transaction. Daily: omit so CF activates with 0
+          //                credits and no upfront charge.
+          ...(isLockerPlan && memLockerMode === "bundle" && memLockerSessionsNum > 0
+            ? { lockerSessions: memLockerSessionsNum }
+            : {}),
         }
       );
       const debtMsg = (result.remainingDebt ?? 0) > 0 ? ` · Utang: ${fmtIdr(result.remainingDebt!)}` : "";
-      const sessMsg = isLockerPlan ? ` · ${memLockerSessionsNum} sesi` : "";
+      const sessMsg = isLockerPlan
+        ? (memLockerMode === "bundle" ? ` · ${memLockerSessionsNum} sesi` : " · mode harian")
+        : "";
       setMemFeedback({ type: "ok", msg: `✓ ${memSelectedPlan?.name} aktif untuk ${memSelectedCustomer.displayName}${sessMsg}${debtMsg}` });
       setMemSelectedCustomer(null); setMemCustomerSearch(""); setMemSelectedPlanId("");
       setMemAmountPaid(""); setMemNotes(""); setMemLockerSessions("10");
@@ -684,20 +717,41 @@ export default function OwnerPosPage() {
                 <span className="font-semibold">{memSelectedPlan.name}</span>
               </div>
               {memSelectedPlan.planType === "locker" ? (
-                <>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Jumlah Sesi</span>
-                    <span className="font-semibold">{memLockerSessionsNum} sesi</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">Harga / Sesi</span>
-                    <span className="font-medium">{fmtIdr(memSelectedPlan.blendingFeePerSession ?? 0)}</span>
-                  </div>
-                  <div className="flex justify-between border-t border-slate-200 pt-2">
-                    <span className="font-medium text-slate-600">Total</span>
-                    <span className="font-bold">{fmtIdr(memPlanPrice)}</span>
-                  </div>
-                </>
+                memLockerMode === "bundle" ? (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Mode</span>
+                      <span className="font-semibold">🎟 Bundel sesi</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Jumlah Sesi</span>
+                      <span className="font-semibold">{memLockerSessionsNum} sesi</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Harga / Sesi</span>
+                      <span className="font-medium">{fmtIdr(memSelectedPlan.blendingFeePerSession ?? 0)}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-slate-200 pt-2">
+                      <span className="font-medium text-slate-600">Total</span>
+                      <span className="font-bold">{fmtIdr(memPlanPrice)}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Mode</span>
+                      <span className="font-semibold">📅 Bayar harian</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Tarif / Kunjungan</span>
+                      <span className="font-medium">{fmtIdr(memSelectedPlan.blendingFeePerSession ?? 0)}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-slate-200 pt-2">
+                      <span className="font-medium text-slate-600">Bayar Sekarang</span>
+                      <span className="font-bold text-slate-500">Rp 0</span>
+                    </div>
+                  </>
+                )
               ) : (
                 <div className="flex justify-between border-t border-slate-200 pt-2">
                   <span className="font-medium text-slate-600">Total</span>
@@ -1447,17 +1501,35 @@ export default function OwnerPosPage() {
                   {memSelectedPlan.planType === "locker" && (
                     <>
                       <div className="flex justify-between">
-                        <span className="text-slate-500">Harga / Sesi</span>
+                        <span className="text-slate-500">{memLockerMode === "bundle" ? "Harga / Sesi" : "Tarif / Kunjungan"}</span>
                         <span className="font-medium">{fmtIdr(memSelectedPlan.blendingFeePerSession ?? 0)}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Sesi dibeli</span>
-                        <span className="font-semibold text-purple-700">{memLockerSessionsNum}×</span>
-                      </div>
-                      <div className="flex justify-between border-t border-slate-100 pt-2">
-                        <span className="font-semibold text-slate-700">Total</span>
-                        <span className="text-lg font-bold text-purple-700">{fmtIdr(memPlanPrice)}</span>
-                      </div>
+                      {memLockerMode === "bundle" ? (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Sesi dibeli</span>
+                            <span className="font-semibold text-purple-700">{memLockerSessionsNum}×</span>
+                          </div>
+                          <div className="flex justify-between border-t border-slate-100 pt-2">
+                            <span className="font-semibold text-slate-700">Total</span>
+                            <span className="text-lg font-bold text-purple-700">{fmtIdr(memPlanPrice)}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Saldo Awal</span>
+                            <span className="font-medium text-slate-700">0 sesi</span>
+                          </div>
+                          <div className="flex justify-between border-t border-slate-100 pt-2">
+                            <span className="font-semibold text-slate-700">Bayar Sekarang</span>
+                            <span className="text-lg font-bold text-slate-500">Rp 0</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 italic leading-relaxed">
+                            Member terdaftar tanpa biaya. Setiap kunjungan dibayar tunai di tab Loker.
+                          </p>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -1468,55 +1540,89 @@ export default function OwnerPosPage() {
                 </div>
               )}
 
-              {/* ── Locker: sessions input ── */}
+              {/* ── Locker: mode toggle + sessions input ── */}
               {memSelectedPlan && memSelectedPlan.planType === "locker" && (
                 <div className="border-t border-slate-100 pt-4 space-y-3">
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pembelian Sesi Loker</p>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Mode Aktivasi Loker</p>
 
-                  {/* Sessions stepper */}
-                  <div>
-                    <p className="text-xs text-slate-500 mb-1.5">
-                      Harga: <strong>{fmtIdr(memSelectedPlan.blendingFeePerSession ?? 0)}</strong> / sesi
-                    </p>
-                    <div className="flex items-stretch gap-2">
-                      <button
-                        onClick={() => setMemLockerSessions(String(Math.max(1, memLockerSessionsNum - 1)))}
-                        className="w-10 shrink-0 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-xl font-bold hover:bg-rose-100 transition flex items-center justify-center"
-                      >−</button>
-                      <input
-                        type="number"
-                        min={1}
-                        className="flex-1 min-w-0 border-2 border-purple-300 rounded-xl px-3 py-2.5 text-xl font-bold text-purple-700 text-center bg-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-400 placeholder:text-purple-200"
-                        value={memLockerSessions}
-                        onChange={(e) => setMemLockerSessions(e.target.value)}
-                      />
-                      <button
-                        onClick={() => setMemLockerSessions(String(memLockerSessionsNum + 1))}
-                        className="w-10 shrink-0 rounded-xl bg-purple-50 border border-purple-200 text-purple-600 text-xl font-bold hover:bg-purple-100 transition flex items-center justify-center"
-                      >+</button>
-                    </div>
-                    <div className="flex justify-between text-sm font-bold mt-2 px-1">
-                      <span className="text-slate-500">Total</span>
-                      <span className="text-purple-700">{fmtIdr(memPlanPrice)}</span>
-                    </div>
+                  {/* Mode toggle */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setMemLockerMode("bundle")}
+                      className={`text-left rounded-xl border-2 p-3 transition ${
+                        memLockerMode === "bundle"
+                          ? "border-purple-500 bg-purple-50"
+                          : "border-slate-200 bg-white hover:border-slate-300"
+                      }`}
+                    >
+                      <p className="text-sm font-bold text-slate-800">🎟 Bundel Sesi</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-tight">Bayar di muka untuk N sesi</p>
+                    </button>
+                    <button
+                      onClick={() => setMemLockerMode("daily")}
+                      className={`text-left rounded-xl border-2 p-3 transition ${
+                        memLockerMode === "daily"
+                          ? "border-slate-700 bg-slate-50"
+                          : "border-slate-200 bg-white hover:border-slate-300"
+                      }`}
+                    >
+                      <p className="text-sm font-bold text-slate-800">📅 Bayar Harian</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-tight">Daftar saja, bayar saat kunjungan</p>
+                    </button>
                   </div>
 
-                  {/* Quick-session chips */}
-                  <div className="flex gap-1.5">
-                    {[5, 10, 20, 30].map((n) => (
-                      <button
-                        key={n}
-                        onClick={() => setMemLockerSessions(String(n))}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition border ${
-                          memLockerSessionsNum === n
-                            ? "bg-purple-600 text-white border-purple-600"
-                            : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200"
-                        }`}
-                      >
-                        {n}×
-                      </button>
-                    ))}
-                  </div>
+                  {memLockerMode === "bundle" ? (
+                    <>
+                      {/* Sessions stepper */}
+                      <div>
+                        <p className="text-xs text-slate-500 mb-1.5">
+                          Harga: <strong>{fmtIdr(memSelectedPlan.blendingFeePerSession ?? 0)}</strong> / sesi
+                        </p>
+                        <div className="flex items-stretch gap-2">
+                          <button
+                            onClick={() => setMemLockerSessions(String(Math.max(1, memLockerSessionsNum - 1)))}
+                            className="w-10 shrink-0 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-xl font-bold hover:bg-rose-100 transition flex items-center justify-center"
+                          >−</button>
+                          <input
+                            type="number"
+                            min={1}
+                            className="flex-1 min-w-0 border-2 border-purple-300 rounded-xl px-3 py-2.5 text-xl font-bold text-purple-700 text-center bg-purple-50 focus:outline-none focus:ring-2 focus:ring-purple-400 placeholder:text-purple-200"
+                            value={memLockerSessions}
+                            onChange={(e) => setMemLockerSessions(e.target.value)}
+                          />
+                          <button
+                            onClick={() => setMemLockerSessions(String(memLockerSessionsNum + 1))}
+                            className="w-10 shrink-0 rounded-xl bg-purple-50 border border-purple-200 text-purple-600 text-xl font-bold hover:bg-purple-100 transition flex items-center justify-center"
+                          >+</button>
+                        </div>
+                        <div className="flex justify-between text-sm font-bold mt-2 px-1">
+                          <span className="text-slate-500">Total</span>
+                          <span className="text-purple-700">{fmtIdr(memPlanPrice)}</span>
+                        </div>
+                      </div>
+
+                      {/* Quick-session chips */}
+                      <div className="flex gap-1.5">
+                        {[5, 10, 20, 30].map((n) => (
+                          <button
+                            key={n}
+                            onClick={() => setMemLockerSessions(String(n))}
+                            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition border ${
+                              memLockerSessionsNum === n
+                                ? "bg-purple-600 text-white border-purple-600"
+                                : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200"
+                            }`}
+                          >
+                            {n}×
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5 text-xs text-slate-600 leading-relaxed">
+                      Member langsung terdaftar tanpa biaya. Setiap datang, operator catat kunjungan di tab <strong className="text-slate-700">🔑 Loker</strong> dengan pilihan bayar tunai.
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1631,7 +1737,9 @@ export default function OwnerPosPage() {
                 : !memSelectedPlanId
                 ? "Pilih paket dulu"
                 : isLockerPlan
-                ? `✓ Aktifkan — ${memLockerSessionsNum} sesi · ${fmtIdr(memPlanPrice)}`
+                ? (memLockerMode === "bundle"
+                    ? `✓ Aktifkan — ${memLockerSessionsNum} sesi · ${fmtIdr(memPlanPrice)}`
+                    : "✓ Daftarkan sebagai member loker harian")
                 : `✓ Aktifkan — ${fmtIdr(memPlanPrice)}`}
             </button>
           </div>
@@ -1649,9 +1757,19 @@ export default function OwnerPosPage() {
               {lockSelectedMember ? (
                 <div className="flex items-center justify-between bg-purple-50 rounded-xl px-3 py-2.5">
                   <div>
-                    <p className="text-sm font-bold text-purple-900">{lockSelectedMember.customerName}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-bold text-purple-900">{lockSelectedMember.customerName}</p>
+                      {lockSelectedMember.blendingCredits === 0 && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                          📅 Harian
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-purple-500">
-                      {lockSelectedMember.planName} · {lockSelectedMember.blendingCredits} kredit tersisa
+                      {lockSelectedMember.planName}
+                      {lockSelectedMember.blendingCredits > 0
+                        ? ` · ${lockSelectedMember.blendingCredits} kredit tersisa`
+                        : ` · bayar tunai per kunjungan`}
                       {lockSelectedMember.expiresAt ? ` · exp ${new Date(lockSelectedMember.expiresAt).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}` : ""}
                     </p>
                   </div>
@@ -1670,7 +1788,8 @@ export default function OwnerPosPage() {
                   {lockShowDropdown && lockFilteredMembers.length > 0 && (
                     <div className="absolute left-0 right-0 top-full z-10 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden mt-1 max-h-64 overflow-y-auto">
                       {lockFilteredMembers.map((m) => {
-                        const lowCredit = m.blendingCredits <= 3;
+                        const isDaily = m.blendingCredits === 0;
+                        const lowCredit = !isDaily && m.blendingCredits <= 3;
                         return (
                           <button
                             key={m.membershipId}
@@ -1681,9 +1800,11 @@ export default function OwnerPosPage() {
                             <div className="flex items-center justify-between gap-2">
                               <p className="text-sm font-semibold text-slate-800 truncate">{m.customerName}</p>
                               <span className={`shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${
-                                lowCredit ? "bg-red-100 text-red-600" : "bg-purple-100 text-purple-700"
+                                isDaily   ? "bg-slate-200 text-slate-700" :
+                                lowCredit ? "bg-red-100 text-red-600"     :
+                                            "bg-purple-100 text-purple-700"
                               }`}>
-                                {m.blendingCredits} kredit
+                                {isDaily ? "📅 Harian" : `${m.blendingCredits} kredit`}
                               </span>
                             </div>
                             <p className="text-xs text-slate-400 mt-0.5">{m.planName}{m.customerPhone ? ` · ${m.customerPhone}` : ""}</p>
@@ -1704,7 +1825,8 @@ export default function OwnerPosPage() {
               <div className="flex-1 overflow-y-auto">
                 <div className="grid grid-cols-2 xl:grid-cols-3 gap-3 pb-4">
                   {lockerMembers.map((m) => {
-                    const lowCredit = m.blendingCredits <= 3;
+                    const isDaily   = m.blendingCredits === 0;
+                    const lowCredit = !isDaily && m.blendingCredits <= 3;
                     return (
                       <button
                         key={m.membershipId}
@@ -1714,9 +1836,11 @@ export default function OwnerPosPage() {
                         <div className="flex items-start justify-between gap-2 mb-2">
                           <p className="text-sm font-bold text-slate-800 leading-snug">{m.customerName}</p>
                           <span className={`shrink-0 text-xs font-bold px-2 py-0.5 rounded-full ${
-                            lowCredit ? "bg-red-100 text-red-600" : "bg-purple-100 text-purple-700"
+                            isDaily   ? "bg-slate-200 text-slate-700" :
+                            lowCredit ? "bg-red-100 text-red-600"     :
+                                        "bg-purple-100 text-purple-700"
                           }`}>
-                            {m.blendingCredits}×
+                            {isDaily ? "📅 Harian" : `${m.blendingCredits}×`}
                           </span>
                         </div>
                         <p className="text-xs text-slate-400">{m.planName}</p>
@@ -1768,19 +1892,27 @@ export default function OwnerPosPage() {
                   <div>
                     <p className="text-xs font-semibold text-slate-500 mb-2">Tipe Pembayaran</p>
                     <div className="flex gap-2">
-                      {(["credits", "cash"] as const).map((t) => (
-                        <button
-                          key={t}
-                          onClick={() => setLockPaymentType(t)}
-                          className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition ${
-                            lockPaymentType === t
-                              ? t === "credits" ? "border-purple-600 bg-purple-600 text-white" : "border-slate-800 bg-slate-900 text-white"
-                              : "border-slate-200 text-slate-500 hover:border-slate-400"
-                          }`}
-                        >
-                          {t === "credits" ? "🎫 Kredit" : "💵 Cash"}
-                        </button>
-                      ))}
+                      {(["credits", "cash"] as const).map((t) => {
+                        // Daily-mode members have no credits to spend — disable
+                        // the credits option so it can't be picked by mistake.
+                        const disabled = t === "credits" && (lockSelectedMember?.blendingCredits ?? 0) === 0;
+                        return (
+                          <button
+                            key={t}
+                            onClick={() => !disabled && setLockPaymentType(t)}
+                            disabled={disabled}
+                            className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition ${
+                              disabled
+                                ? "border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed"
+                                : lockPaymentType === t
+                                ? t === "credits" ? "border-purple-600 bg-purple-600 text-white" : "border-slate-800 bg-slate-900 text-white"
+                                : "border-slate-200 text-slate-500 hover:border-slate-400"
+                            }`}
+                          >
+                            {t === "credits" ? "🎫 Kredit" : "💵 Cash"}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
