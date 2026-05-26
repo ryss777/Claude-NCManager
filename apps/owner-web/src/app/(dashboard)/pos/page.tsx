@@ -198,10 +198,19 @@ export default function OwnerPosPage() {
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [amountPaid, setAmountPaid]       = useState("");
+  // True once the operator has manually changed the amountPaid input (typing,
+  // stepper, quick-pay buttons). While false, amountPaid auto-mirrors the
+  // cart subtotal — so the common "pay exact" path needs zero keystrokes,
+  // but a partial payment that's already been entered survives cart edits.
+  const [amountPaidTouched, setAmountPaidTouched] = useState(false);
   const [notes, setNotes]                 = useState("");
   const [walkInMode, setWalkInMode]       = useState(false);
   const [walkInName, setWalkInName]       = useState("");
   const [submitting, setSubmitting]       = useState(false);
+  // Price-edit gate: cart prices are locked by default — owner must unlock
+  // explicitly to override per-line price, so a stray click can't change
+  // the cost of an item.
+  const [priceEditUnlocked, setPriceEditUnlocked] = useState(false);
   const [receipt, setReceipt] = useState<{
     transactionId: string; total: number; change: number;
     items: CartItem[]; customer: Customer | null;
@@ -265,6 +274,17 @@ export default function OwnerPosPage() {
   const change   = paid - subtotal;
   const remainingDebt = paymentMethod === "cash" && amountPaid !== "" && paid < subtotal && subtotal > 0
     ? subtotal - paid : 0;
+
+  // Mirror cart subtotal into amountPaid until the operator manually edits it.
+  // Default "pay exact" needs zero keystrokes; partial-payment intent (once
+  // typed) is preserved through cart changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (amountPaidTouched) return;
+    if (paymentMethod !== "cash") return;
+    const desired = subtotal > 0 ? String(subtotal) : "";
+    if (amountPaid !== desired) setAmountPaid(desired);
+  }, [subtotal, amountPaidTouched, paymentMethod]);
 
   function tierPrice(p: Product) {
     return p.prices?.[activeTier] ?? p.prices?.retail ?? 0;
@@ -377,6 +397,8 @@ export default function OwnerPosPage() {
     setWalkInMode(false); setWalkInName("");
     setActiveTier("retail");
     setAmountPaid(""); setNotes(""); setPaymentMethod("cash");
+    setPriceEditUnlocked(false);
+    setAmountPaidTouched(false);
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
@@ -784,40 +806,26 @@ export default function OwnerPosPage() {
           {/* ── Left: catalog ── */}
           <div className="flex-1 min-w-0 flex flex-col gap-3 min-h-0">
 
-            {/* Tier selector row */}
-            <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-              <span className="text-xs font-semibold text-slate-400 mr-0.5">Tier:</span>
-              {(Object.keys(TIER_LABELS) as CustomerTier[]).map((tier) => (
-                <button
-                  key={tier}
-                  onClick={() => changeTier(tier)}
-                  className={`px-3 py-1 rounded-full text-xs font-bold transition ${
-                    activeTier === tier ? TIER_PILL[tier] : TIER_PILL_INACTIVE[tier]
-                  }`}
-                >
-                  {TIER_LABELS[tier]}
-                </button>
-              ))}
+            {/* Search row — full width */}
+            <div className="relative shrink-0">
+              <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">🔍</span>
+              <input
+                className="w-full pl-10 pr-3 py-2.5 text-sm border border-slate-200 rounded-xl bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Cari produk berdasarkan nama…"
+                value={productSearch}
+                onChange={(e) => setProductSearch(e.target.value)}
+              />
             </div>
 
-            {/* Search + categories */}
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="relative flex-1">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">🔍</span>
-                <input
-                  className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-xl bg-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Cari produk…"
-                  value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
-                />
-              </div>
+            {/* Category chips */}
+            <div className="flex items-center gap-1.5 flex-wrap shrink-0">
               {CATEGORIES.map((c) => (
                 <button
                   key={c}
                   onClick={() => setCategoryFilter(c)}
-                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition whitespace-nowrap ${
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition whitespace-nowrap ${
                     categoryFilter === c
-                      ? "bg-slate-800 text-white border-slate-800"
+                      ? "bg-slate-900 text-white border-slate-900"
                       : "border-slate-200 text-slate-500 hover:border-slate-400 bg-white"
                   }`}
                 >
@@ -836,7 +844,7 @@ export default function OwnerPosPage() {
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto">
-                <div className="grid grid-cols-3 gap-2.5 content-start pb-4">
+                <div className="grid grid-cols-3 xl:grid-cols-4 gap-2.5 content-start pb-4">
                   {filteredProducts.map((p) => {
                     const inCart    = cart.find((i) => i.productId === p.id);
                     const stock     = p.currentStock ?? 0;
@@ -905,11 +913,34 @@ export default function OwnerPosPage() {
           </div>
 
           {/* ── Right: order panel ── */}
-          <div className="w-80 shrink-0 flex flex-col min-h-0 bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="w-96 shrink-0 flex flex-col min-h-0 bg-white rounded-2xl border border-slate-200 overflow-hidden">
 
-            {/* Customer selector */}
+            {/* Customer selector + tier control */}
             <div className="px-4 pt-4 pb-3 border-b border-slate-100 shrink-0 relative">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">👤 Pelanggan</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">👤 Pelanggan</p>
+                <details className="relative">
+                  <summary className="list-none cursor-pointer text-xs font-semibold text-slate-500 hover:text-slate-700 select-none">
+                    Tier: <span className="text-slate-800">{TIER_LABELS[activeTier]}</span> ▾
+                  </summary>
+                  <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-xl shadow-lg p-1.5 flex flex-col gap-1 min-w-[120px]">
+                    {(Object.keys(TIER_LABELS) as CustomerTier[]).map((tier) => (
+                      <button
+                        key={tier}
+                        onClick={(e) => {
+                          changeTier(tier);
+                          (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open");
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold text-left transition ${
+                          activeTier === tier ? TIER_PILL[tier] : "text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        {TIER_LABELS[tier]}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              </div>
 
               {/* ── Registered customer selected ── */}
               {selectedCustomer ? (
@@ -1005,21 +1036,46 @@ export default function OwnerPosPage() {
                     <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">
                       {cart.length} produk
                     </p>
-                    <button onClick={clearCart} className="text-xs text-red-400 hover:text-red-600 font-semibold">
-                      Kosongkan
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => setPriceEditUnlocked((v) => !v)}
+                        className={`text-xs font-semibold flex items-center gap-1 transition ${
+                          priceEditUnlocked
+                            ? "text-amber-600 hover:text-amber-700"
+                            : "text-slate-400 hover:text-slate-600"
+                        }`}
+                        title={priceEditUnlocked ? "Klik untuk kunci harga" : "Klik untuk edit harga manual"}
+                      >
+                        {priceEditUnlocked ? "🔓 Edit harga" : "🔒 Harga"}
+                      </button>
+                      <button onClick={clearCart} className="text-xs text-red-400 hover:text-red-600 font-semibold">
+                        Kosongkan
+                      </button>
+                    </div>
                   </div>
                   {cart.map((item) => (
-                    <div key={item.productId} className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2">
+                    <div
+                      key={item.productId}
+                      className={`flex items-center gap-2 rounded-xl px-3 py-2 ${
+                        priceEditUnlocked ? "bg-amber-50 ring-1 ring-amber-200" : "bg-slate-50"
+                      }`}
+                    >
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-semibold text-slate-800 truncate">{item.productName}</p>
-                        <input
-                          type="number"
-                          className="mt-0.5 w-full border-0 bg-transparent text-xs text-slate-400 p-0 focus:outline-none focus:text-slate-700"
-                          value={item.unitPrice}
-                          onChange={(e) => setPrice(item.productId, e.target.value)}
-                          title="Tap untuk edit harga"
-                        />
+                        {priceEditUnlocked ? (
+                          <div className="mt-0.5 flex items-center gap-1 text-xs text-amber-700">
+                            <span className="font-medium">Rp</span>
+                            <input
+                              type="number"
+                              className="flex-1 min-w-0 border border-amber-300 bg-white rounded px-1.5 py-0.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-amber-400"
+                              value={item.unitPrice}
+                              onChange={(e) => setPrice(item.productId, e.target.value)}
+                            />
+                            <span className="text-amber-500">/ pcs</span>
+                          </div>
+                        ) : (
+                          <p className="mt-0.5 text-xs text-slate-400">{fmtIdr(item.unitPrice)} / pcs</p>
+                        )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <button
@@ -1046,10 +1102,10 @@ export default function OwnerPosPage() {
             {cart.length > 0 && (
               <div className="border-t border-slate-100 shrink-0">
 
-                {/* Subtotal bar */}
-                <div className="px-4 py-2.5 flex justify-between items-center bg-slate-50">
-                  <span className="text-sm font-semibold text-slate-500">Subtotal</span>
-                  <span className="text-xl font-bold text-slate-900">{fmtIdr(subtotal)}</span>
+                {/* Total Bayar — large, prominent */}
+                <div className="px-4 py-3 flex justify-between items-baseline bg-slate-900 text-white">
+                  <span className="text-xs font-bold uppercase tracking-widest text-slate-300">Total Bayar</span>
+                  <span className="text-2xl font-extrabold tabular-nums">{fmtIdr(subtotal)}</span>
                 </div>
 
                 <div className="px-4 py-3 space-y-2.5">
@@ -1058,7 +1114,7 @@ export default function OwnerPosPage() {
                     {(["cash", "transfer"] as PaymentMethod[]).map((m) => (
                       <button
                         key={m}
-                        onClick={() => { setPaymentMethod(m); setAmountPaid(""); }}
+                        onClick={() => { setPaymentMethod(m); setAmountPaid(""); setAmountPaidTouched(false); }}
                         className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition ${
                           paymentMethod === m
                             ? "border-slate-800 bg-slate-900 text-white"
@@ -1073,10 +1129,30 @@ export default function OwnerPosPage() {
                   {/* Cash: amount input + quick amounts + change/debt */}
                   {paymentMethod === "cash" && (
                     <div className="space-y-2">
+                      {/* Label row: shows auto / partial state + reset link */}
+                      <div className="flex items-baseline justify-between px-1">
+                        <p className="text-xs font-semibold text-slate-500">
+                          Jumlah Bayar
+                          {!amountPaidTouched && subtotal > 0 && (
+                            <span className="ml-1.5 text-[10px] font-medium text-slate-400 uppercase tracking-wide">otomatis = total</span>
+                          )}
+                        </p>
+                        {amountPaidTouched && subtotal > 0 && (
+                          <button
+                            onClick={() => { setAmountPaidTouched(false); }}
+                            className="text-xs text-blue-600 hover:text-blue-700 font-semibold"
+                          >
+                            ↻ Reset = Total
+                          </button>
+                        )}
+                      </div>
                       {/* Stepper row */}
                       <div className="flex items-stretch gap-2">
                         <button
-                          onClick={() => setAmountPaid(String(Math.max(0, (parseFloat(amountPaid) || 0) - 50000)))}
+                          onClick={() => {
+                            setAmountPaidTouched(true);
+                            setAmountPaid(String(Math.max(0, (parseFloat(amountPaid) || 0) - 50000)));
+                          }}
                           className="w-11 shrink-0 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-2xl font-bold hover:bg-rose-100 active:scale-95 transition flex items-center justify-center"
                         >
                           −
@@ -1087,33 +1163,32 @@ export default function OwnerPosPage() {
                           className="flex-1 min-w-0 border-2 border-blue-300 rounded-xl px-3 py-3 text-2xl font-bold text-blue-700 text-center bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 placeholder:text-blue-200"
                           placeholder="0"
                           value={amountPaid}
-                          onChange={(e) => setAmountPaid(e.target.value)}
+                          onChange={(e) => { setAmountPaidTouched(true); setAmountPaid(e.target.value); }}
                         />
                         <button
-                          onClick={() => setAmountPaid(String((parseFloat(amountPaid) || 0) + 50000))}
+                          onClick={() => {
+                            setAmountPaidTouched(true);
+                            setAmountPaid(String((parseFloat(amountPaid) || 0) + 50000));
+                          }}
                           className="w-11 shrink-0 rounded-xl bg-blue-50 border border-blue-200 text-blue-600 text-2xl font-bold hover:bg-blue-100 active:scale-95 transition flex items-center justify-center"
                         >
                           +
                         </button>
                       </div>
-                      {/* Quick-pay buttons */}
-                      <div className="flex gap-1.5">
-                        <button
-                          onClick={() => setAmountPaid(String(subtotal))}
-                          className="flex-1 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 text-xs font-bold rounded-lg border border-green-200 transition"
-                        >
-                          Pas
-                        </button>
-                        {quickAmounts.map((v) => (
-                          <button
-                            key={v}
-                            onClick={() => setAmountPaid(String(v))}
-                            className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition"
-                          >
-                            {v >= 1000000 ? `${v / 1000000}jt` : `${v / 1000}rb`}
-                          </button>
-                        ))}
-                      </div>
+                      {/* Quick-pay buttons — only shown when operator has gone off the auto value */}
+                      {amountPaidTouched && (
+                        <div className="flex gap-1.5">
+                          {quickAmounts.map((v) => (
+                            <button
+                              key={v}
+                              onClick={() => { setAmountPaidTouched(true); setAmountPaid(String(v)); }}
+                              className="flex-1 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition"
+                            >
+                              {v >= 1000000 ? `${v / 1000000}jt` : `${v / 1000}rb`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       {/* Change / debt feedback */}
                       {amountPaid !== "" && paid > 0 && (
                         remainingDebt > 0 ? (
@@ -1151,7 +1226,34 @@ export default function OwnerPosPage() {
                 </div>
 
                 {/* Submit */}
-                <div className="px-4 pb-4">
+                <div className="px-4 pb-4 space-y-2">
+                  {/* Validation banner — surfaces blockers above the action,
+                      so the button itself stays consistent and short */}
+                  {(() => {
+                    if (paymentMethod === "cash" && paid === 0) {
+                      return (
+                        <div className="text-xs px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 font-medium">
+                          ⚠ Masukkan jumlah bayar
+                        </div>
+                      );
+                    }
+                    if (remainingDebt > 0 && walkInMode) {
+                      return (
+                        <div className="text-xs px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 font-medium">
+                          🚶 Walk-in harus bayar lunas — tambah nominal atau ubah ke pelanggan terdaftar
+                        </div>
+                      );
+                    }
+                    if (remainingDebt > 0 && !selectedCustomer) {
+                      return (
+                        <div className="text-xs px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-700 font-medium">
+                          ⚠ Pilih pelanggan terdaftar untuk mencatat utang
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
                   <button
                     onClick={handleSubmit}
                     disabled={
@@ -1163,13 +1265,9 @@ export default function OwnerPosPage() {
                   >
                     {submitting
                       ? "⏳ Memproses…"
-                      : remainingDebt > 0 && walkInMode
-                      ? "🚶 Walk-in harus bayar lunas"
-                      : remainingDebt > 0 && !selectedCustomer
-                      ? "Pilih pelanggan untuk catat utang"
                       : remainingDebt > 0
-                      ? `✓ Bayar ${fmtIdr(paid)} + Utang ${fmtIdr(remainingDebt)}`
-                      : `✓ Bayar ${fmtIdr(paymentMethod === "cash" ? (paid || subtotal) : subtotal)}`}
+                      ? `Bayar ${fmtIdr(paid)} + Utang ${fmtIdr(remainingDebt)}`
+                      : `Bayar ${fmtIdr(paymentMethod === "cash" ? (paid || subtotal) : subtotal)}`}
                   </button>
                 </div>
               </div>
