@@ -23,27 +23,16 @@ export const debt_recordPayment = onCall(async (request) => {
   throwIfDuplicate(isDuplicate, operationId);
 
   const debtRef = db.collection(COLLECTIONS.DEBTS(ownerId, clubId)).doc(debtId);
-  const debtSnap = await debtRef.get();
-  if (!debtSnap.exists) throw new HttpsError("not-found", "Debt record not found");
 
-  const debt = debtSnap.data()!;
-  if ((debt["status"] as string) === "paid") {
+  // Pre-check: fail fast on dead state without entering the tx.
+  // Authoritative checks + counter math happen inside the tx below.
+  const preSnap = await debtRef.get();
+  if (!preSnap.exists) throw new HttpsError("not-found", "Debt record not found");
+  if ((preSnap.data()!["status"] as string) === "paid") {
     throw new HttpsError("failed-precondition", "Utang ini sudah lunas");
   }
 
-  const remainingAmount = debt["remainingAmount"] as number;
-  if (amount > remainingAmount) {
-    throw new HttpsError(
-      "invalid-argument",
-      `Jumlah bayar (${amount}) melebihi sisa utang (${remainingAmount})`
-    );
-  }
-
   const now = new Date().toISOString();
-  const newPaidAmount = (debt["paidAmount"] as number) + amount;
-  const newRemainingAmount = remainingAmount - amount;
-  const newStatus = newRemainingAmount <= 0 ? "paid" : "partial";
-
   const newPayment = {
     amount,
     paymentMethod,
@@ -52,8 +41,33 @@ export const debt_recordPayment = onCall(async (request) => {
   };
 
   const txRef = db.collection(COLLECTIONS.TRANSACTIONS(ownerId, clubId)).doc();
+  let newPaidAmount = 0;
+  let newRemainingAmount = 0;
+  let newStatus: "partial" | "paid" = "partial";
 
   await db.runTransaction(async (tx) => {
+    // Re-read inside tx so concurrent payments don't lose money or
+    // drop payment entries from the array.
+    const debtSnap = await tx.get(debtRef);
+    if (!debtSnap.exists) throw new HttpsError("not-found", "Debt record not found");
+    const debt = debtSnap.data()!;
+
+    if ((debt["status"] as string) === "paid") {
+      throw new HttpsError("failed-precondition", "Utang ini sudah lunas");
+    }
+
+    const remainingAmount = debt["remainingAmount"] as number;
+    if (amount > remainingAmount) {
+      throw new HttpsError(
+        "invalid-argument",
+        `Jumlah bayar (${amount}) melebihi sisa utang (${remainingAmount})`
+      );
+    }
+
+    newPaidAmount = (debt["paidAmount"] as number) + amount;
+    newRemainingAmount = remainingAmount - amount;
+    newStatus = newRemainingAmount <= 0 ? "paid" : "partial";
+
     // 1. Update debt record
     tx.update(debtRef, {
       paidAmount: newPaidAmount,
