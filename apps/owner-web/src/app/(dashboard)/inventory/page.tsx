@@ -312,14 +312,12 @@ function StockTable({
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-// History section sub-tab — only used for the bottom "Histori & Aktivitas"
-// section. The page itself no longer uses top-level tabs.
-type HistoryTab = "movements" | "restock";
+type PageTab = "stok" | "transfer" | "restock" | "movements";
 
 export default function InventoryPage() {
   const { ownerId, clubId } = useOwnerAuthStore();
 
-  const [historyTab, setHistoryTab] = useState<HistoryTab>("movements");
+  const [activeTab, setActiveTab] = useState<PageTab>("stok");
 
   // ── Clubs (needed for transfer) — load on mount, always available now ────
   const [clubs, setClubs] = useState<Club[]>([]);
@@ -345,12 +343,6 @@ export default function InventoryPage() {
       })
       .catch(() => {});
   }, [ownerId]);
-
-  // Refs for smooth scroll from hero CTA to transfer section
-  const transferSectionRef = useRef<HTMLDivElement>(null);
-  function scrollToTransfer() {
-    transferSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
 
   // ── Tab: owner inventory ────────────────────────────────────────────────────
 
@@ -610,8 +602,8 @@ export default function InventoryPage() {
   }
 
   useEffect(() => {
-    if (historyTab === "restock") loadReplenishments();
-  }, [historyTab, ownerId, clubId]);
+    if (activeTab === "restock") loadReplenishments();
+  }, [activeTab, ownerId, clubId]);
 
   async function handleRestock() {
     if (restockItems.length === 0) return;
@@ -681,8 +673,8 @@ export default function InventoryPage() {
   }
 
   useEffect(() => {
-    if (historyTab === "movements") loadMovements();
-  }, [historyTab, ownerId, clubId]);
+    if (activeTab === "movements") loadMovements();
+  }, [activeTab, ownerId, clubId]);
 
   const filteredMovements = useMemo(() =>
     movementTypeFilter === "all"
@@ -707,8 +699,18 @@ export default function InventoryPage() {
       })()
     : "—";
 
+  const TABS: { key: PageTab; label: string; icon: string; badge?: number }[] = [
+    { key: "stok",      label: "Stok Gudang",     icon: "📦" },
+    {
+      key: "transfer",  label: "Transfer",        icon: "↔️",
+      ...(pendingIncoming > 0 ? { badge: pendingIncoming } : {}),
+    },
+    { key: "restock",   label: "Restok",          icon: "📥" },
+    { key: "movements", label: "Pergerakan Stok", icon: "📊" },
+  ];
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
 
       {/* ── Title ── */}
       <div>
@@ -716,36 +718,29 @@ export default function InventoryPage() {
         <p className="text-sm text-slate-500 mt-0.5">Kelola stok pusat dan kirim ke club</p>
       </div>
 
-      {/* ── Hero: Transfer Hub ── */}
-      <div className="rounded-3xl bg-gradient-to-br from-teal-100 via-teal-50 to-cyan-100 ring-1 ring-teal-200/60 px-6 py-5">
-        <div className="flex flex-wrap items-start justify-between gap-5">
-          <div className="min-w-0">
-            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              ↔️ Transfer Produk ke Club
-            </h3>
-            <p className="text-sm text-slate-600 mt-1 max-w-xl">
-              Satu-satunya jalan stok masuk ke club. Kirim dari gudang owner ke club tujuan, atau terima transfer masuk dari owner lain.
-            </p>
+      {/* ── Hero: Transfer Hub (always visible) ── */}
+      <div className="rounded-2xl bg-gradient-to-br from-teal-100 via-teal-50 to-cyan-100 ring-1 ring-teal-200/60 px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-slate-900">↔️ Transfer Produk ke Club</p>
+            <p className="text-xs text-slate-600 mt-0.5">Satu-satunya jalan stok masuk ke club — kirim dari gudang owner ke club tujuan.</p>
           </div>
-          <div className="flex gap-2 shrink-0">
-            <button
-              onClick={scrollToTransfer}
-              className="inline-flex items-center gap-2 bg-slate-900 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-700 transition shadow-sm"
-            >
-              + Buat Transfer Baru
-            </button>
-          </div>
+          <button
+            onClick={() => setActiveTab("transfer")}
+            className="inline-flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-700 transition shadow-sm shrink-0"
+          >
+            + Buat Transfer Baru
+          </button>
         </div>
 
         {pendingIncoming > 0 && (
           <button
-            onClick={scrollToTransfer}
-            className="mt-4 w-full sm:w-auto flex items-center gap-3 bg-amber-50 ring-1 ring-amber-200 rounded-2xl px-4 py-2.5 hover:bg-amber-100 transition text-left"
+            onClick={() => setActiveTab("transfer")}
+            className="mt-3 w-full flex items-center gap-3 bg-amber-50 ring-1 ring-amber-200 rounded-xl px-3 py-2 hover:bg-amber-100 transition text-left"
           >
-            <span className="text-2xl">📥</span>
+            <span className="text-xl">📥</span>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold text-amber-800">{pendingIncoming} transfer masuk menunggu konfirmasi</p>
-              <p className="text-xs text-amber-600 mt-0.5">Klik untuk membuka daftar dan menerima.</p>
             </div>
             <span className="text-amber-500 text-lg shrink-0">›</span>
           </button>
@@ -760,11 +755,31 @@ export default function InventoryPage() {
         <StatCard label="Restok Terakhir" value={lastRestokLabel}         loading={loadingReplenishments} accent="slate" small />
       </div>
 
-      {/* ── Stok Gudang section ── */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold text-slate-700 uppercase tracking-widest">Stok Gudang</h2>
-        </div>
+      {/* ── Tab switcher — pick which section to view ── */}
+      <div className="flex items-center gap-1 border-b border-slate-200 -mb-px overflow-x-auto">
+        {TABS.map(({ key, label, icon, badge }) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition whitespace-nowrap flex items-center gap-2 ${
+              activeTab === key
+                ? "border-blue-600 text-blue-700"
+                : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            <span>{icon}</span>
+            {label}
+            {badge !== undefined && (
+              <span className="ml-0.5 bg-amber-100 text-amber-700 rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none">
+                {badge}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Tab: Stok Gudang ── */}
+      {activeTab === "stok" && (
         <div className="flex gap-5">
 
           {/* Left: stock list */}
@@ -1052,21 +1067,15 @@ export default function InventoryPage() {
             )}
           </div>
         </div>
-      </section>
+      )}
 
-      {/* ── Transfer section (always visible — hero CTA scrolls here) ── */}
-      <section ref={transferSectionRef}>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold text-slate-700 uppercase tracking-widest">↔️ Transfer Produk</h2>
-        </div>
+      {/* ── Tab: Transfer ── */}
+      {activeTab === "transfer" && (
         <TransferPanel ownerId={ownerId} sourceClubId={clubId} clubs={clubs} />
-      </section>
+      )}
 
-      {/* ── Restok section ── */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold text-slate-700 uppercase tracking-widest">📥 Restok dari Supplier</h2>
-        </div>
+      {/* ── Tab: Restok ── */}
+      {activeTab === "restock" && (
         <div className="flex gap-6">
           {/* Left: form */}
           <div className="flex-1 min-w-0 flex flex-col gap-4">
@@ -1233,13 +1242,10 @@ export default function InventoryPage() {
             </div>
           </div>
         </div>
-      </section>
+      )}
 
-      {/* ── Pergerakan Stok section ── */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold text-slate-700 uppercase tracking-widest">📊 Pergerakan Stok</h2>
-        </div>
+      {/* ── Tab: Pergerakan Stok ── */}
+      {activeTab === "movements" && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
@@ -1311,7 +1317,7 @@ export default function InventoryPage() {
             )}
           </div>
         </div>
-      </section>
+      )}
 
       {/* ── Bulk remove confirmation modal ── */}
       {bulkConfirmOpen && (
