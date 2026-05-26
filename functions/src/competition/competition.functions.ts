@@ -161,35 +161,40 @@ export const competition_addParticipant = onCall(async (request) => {
 
   let displayName = guestName?.trim() ?? "";
   let customerRef: DocumentReference<DocumentData> | null = null;
-  let existingCompetitionIds: string[] = [];
 
   if (type === "customer" && customerId) {
     customerRef = db.collection(COLLECTIONS.CUSTOMERS(ownerId, clubId)).doc(customerId);
-    const custSnap = await customerRef.get();
-    if (!custSnap.exists) throw new HttpsError("not-found", "Pelanggan tidak ditemukan");
-    const custData = custSnap.data()!;
-    displayName = (custData["displayName"] as string) ?? customerId;
-    existingCompetitionIds = (custData["competitionIds"] as string[]) ?? [];
 
-    // Duplicate check
-    const dupSnap = await db
-      .collection(COLLECTIONS.COMPETITION_PARTICIPANTS(ownerId, clubId, competitionId))
-      .where("customerId", "==", customerId)
-      .limit(1)
-      .get();
+    // Pre-check customer existence + duplicate registration. Counter math
+    // (participantCount + competitionIds array) happens inside the tx below
+    // so concurrent calls can't both increment from the same snapshot.
+    const [custSnap, dupSnap] = await Promise.all([
+      customerRef.get(),
+      db.collection(COLLECTIONS.COMPETITION_PARTICIPANTS(ownerId, clubId, competitionId))
+        .where("customerId", "==", customerId)
+        .limit(1)
+        .get(),
+    ]);
+    if (!custSnap.exists) throw new HttpsError("not-found", "Pelanggan tidak ditemukan");
     if (!dupSnap.empty) {
       throw new HttpsError("already-exists", "Pelanggan ini sudah terdaftar di lomba");
     }
+    displayName = (custSnap.data()!["displayName"] as string) ?? customerId;
   }
 
   const now = new Date().toISOString();
-  const currentCount = (compSnap.data()!["participantCount"] as number) ?? 0;
   const participantRef = db
     .collection(COLLECTIONS.COMPETITION_PARTICIPANTS(ownerId, clubId, competitionId))
     .doc();
   const logCollPath = COLLECTIONS.COMPETITION_ACTIVITY_LOG(ownerId, clubId, competitionId);
 
   await db.runTransaction(async (tx) => {
+    // Re-read counter sources inside the tx — see comment above.
+    const freshCompSnap = await tx.get(compRef);
+    const currentCount = (freshCompSnap.data()?.["participantCount"] as number | undefined) ?? 0;
+    const freshCustSnap = customerRef ? await tx.get(customerRef) : null;
+    const existingIds = (freshCustSnap?.data()?.["competitionIds"] as string[] | undefined) ?? [];
+
     tx.set(participantRef, {
       competitionId,
       type,
@@ -208,9 +213,9 @@ export const competition_addParticipant = onCall(async (request) => {
 
     // Denormalize competition ID onto customer for quick badge lookup
     if (customerRef) {
-      const updatedIds = existingCompetitionIds.includes(competitionId)
-        ? existingCompetitionIds
-        : [...existingCompetitionIds, competitionId];
+      const updatedIds = existingIds.includes(competitionId)
+        ? existingIds
+        : [...existingIds, competitionId];
       tx.update(customerRef, {
         competitionIds: updatedIds,
         updatedAt: now,
@@ -259,25 +264,22 @@ export const competition_removeParticipant = onCall(async (request) => {
   }
 
   const participant = partSnap.data()!;
-  const currentCount = (compSnap.data()!["participantCount"] as number) ?? 0;
   const now = new Date().toISOString();
 
-  let customerRef: DocumentReference<DocumentData> | null = null;
-  let existingCompetitionIds: string[] = [];
-
-  if (participant["type"] === "customer" && participant["customerId"]) {
-    customerRef = db
-      .collection(COLLECTIONS.CUSTOMERS(ownerId, clubId))
-      .doc(participant["customerId"] as string);
-    const custSnap = await customerRef.get();
-    if (custSnap.exists) {
-      existingCompetitionIds = (custSnap.data()!["competitionIds"] as string[]) ?? [];
-    }
-  }
+  const customerRef = participant["type"] === "customer" && participant["customerId"]
+    ? db.collection(COLLECTIONS.CUSTOMERS(ownerId, clubId)).doc(participant["customerId"] as string)
+    : null;
 
   const logCollPath = COLLECTIONS.COMPETITION_ACTIVITY_LOG(ownerId, clubId, competitionId);
 
   await db.runTransaction(async (tx) => {
+    // Re-read counter sources inside the tx so concurrent removes don't
+    // both decrement from the same stale snapshot.
+    const freshCompSnap = await tx.get(compRef);
+    const currentCount = (freshCompSnap.data()?.["participantCount"] as number | undefined) ?? 0;
+    const freshCustSnap = customerRef ? await tx.get(customerRef) : null;
+    const existingIds = (freshCustSnap?.data()?.["competitionIds"] as string[] | undefined) ?? [];
+
     tx.delete(participantRef);
 
     // Manual decrement — avoids FieldValue.increment which has emulator quirks
@@ -287,8 +289,8 @@ export const competition_removeParticipant = onCall(async (request) => {
     });
 
     // Remove competition ID from customer's list
-    if (customerRef) {
-      const updatedIds = existingCompetitionIds.filter((id) => id !== competitionId);
+    if (customerRef && freshCustSnap?.exists) {
+      const updatedIds = existingIds.filter((id) => id !== competitionId);
       tx.update(customerRef, {
         competitionIds: updatedIds,
         updatedAt: now,
@@ -336,28 +338,32 @@ export const competition_recordPayment = onCall(async (request) => {
     throw new HttpsError("failed-precondition", "Lomba sudah selesai, tidak bisa mencatat pembayaran baru");
   }
 
-  const adminFee     = (compSnap.data()!["adminFee"] as number) ?? 0;
-  const currentPaid  = (partSnap.data()!["amountPaid"] as number) ?? 0;
-  const newPaid      = currentPaid + amount;
-
-  if (newPaid > adminFee) {
-    const remaining = adminFee - currentPaid;
-    throw new HttpsError(
-      "invalid-argument",
-      `Jumlah melebihi sisa tagihan. Sisa: Rp ${remaining.toLocaleString("id-ID")}`
-    );
-  }
-
+  const adminFee = (compSnap.data()!["adminFee"] as number) ?? 0;
   const now = new Date().toISOString();
   const logCollPath = COLLECTIONS.COMPETITION_ACTIVITY_LOG(ownerId, clubId, competitionId);
+  let newPaid = 0;
 
   await db.runTransaction(async (tx) => {
+    // Re-read inside the tx so two concurrent payments can't both compute
+    // newPaid from the same currentPaid (which would overcount the total).
+    const freshPartSnap = await tx.get(partRef);
+    const currentPaid = (freshPartSnap.data()?.["amountPaid"] as number | undefined) ?? 0;
+    newPaid = currentPaid + amount;
+
+    if (newPaid > adminFee) {
+      const remaining = adminFee - currentPaid;
+      throw new HttpsError(
+        "invalid-argument",
+        `Jumlah melebihi sisa tagihan. Sisa: Rp ${remaining.toLocaleString("id-ID")}`
+      );
+    }
+
     tx.update(partRef, { amountPaid: newPaid, updatedAt: now });
 
     writeLog(tx, logCollPath, {
       type:            "payment_recorded",
       participantId,
-      participantName: partSnap.data()!["displayName"] as string,
+      participantName: freshPartSnap.data()?.["displayName"] as string,
       amount,
       totalPaid:       newPaid,
       adminFee,
@@ -389,14 +395,12 @@ export const competition_recordMeasurement = onCall(async (request) => {
   const isDuplicate = await checkIdempotency(operationId, idempotencyPath);
   throwIfDuplicate(isDuplicate, operationId);
 
-  // Verify participant exists
+  // Pre-check participant exists. Counter math re-reads inside tx.
   const partRef = db
     .collection(COLLECTIONS.COMPETITION_PARTICIPANTS(ownerId, clubId, competitionId))
     .doc(participantId);
   const partSnap = await partRef.get();
   if (!partSnap.exists) throw new HttpsError("not-found", "Peserta tidak ditemukan");
-
-  const currentMeasurementCount = (partSnap.data()!["measurementCount"] as number) ?? 0;
 
   const now = new Date().toISOString();
   const measurementRef = db
@@ -416,6 +420,11 @@ export const competition_recordMeasurement = onCall(async (request) => {
   if (waterPct     !== undefined) data["waterPct"]     = waterPct;
 
   await db.runTransaction(async (tx) => {
+    // Re-read inside tx so concurrent recordings don't both increment from
+    // the same stale measurementCount.
+    const freshPartSnap = await tx.get(partRef);
+    const currentMeasurementCount = (freshPartSnap.data()?.["measurementCount"] as number | undefined) ?? 0;
+
     tx.set(measurementRef, data);
     tx.update(partRef, { measurementCount: currentMeasurementCount + 1, updatedAt: now });
     await markOperationComplete(tx, operationId, idempotencyPath, { measurementId: measurementRef.id });
