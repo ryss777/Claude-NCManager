@@ -13,7 +13,10 @@ const transactionItemSchema = z.object({
   quantity: z.number().int().min(1).max(99),
   unitPrice: z.number().min(0),
   subtotal: z.number().min(0),
-});
+}).refine(
+  (i) => i.subtotal === i.unitPrice * i.quantity,
+  { message: "subtotal must equal unitPrice × quantity", path: ["subtotal"] }
+);
 
 export const createTransactionSchema = tenantRefSchema
   .merge(idempotencySchema)
