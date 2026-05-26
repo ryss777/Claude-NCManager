@@ -147,12 +147,16 @@ export default function ReportsPage() {
     const monthsAgo12 = isoOfMonthsAgo(12);
     const todayKey = new Date().toISOString().slice(0, 10);
 
-    const [journalPeriod, journalMonthly, visitsSnap, membershipsSnap, txSnap, shiftsSnap, operatorsSnap] =
+    const [journalPeriod, journalMonthly, visitsSnap, membershipsSnap, txPeriodSnap, txRecentSnap, shiftsSnap, operatorsSnap] =
       await Promise.all([
         getDocs(query(collection(db, `${base}/financeJournal`), where("createdAt", ">=", pStart))),
         getDocs(query(collection(db, `${base}/financeJournal`), where("createdAt", ">=", monthsAgo12))),
         getDocs(query(collection(db, `${base}/membershipVisits`), where("createdAt", ">=", pStart))),
         getDocs(query(collection(db, `${base}/memberships`), where("status", "==", "active"))),
+        // Period-bounded set powers the operator + period-transaction stats.
+        // Without this the earlier limit(50)-only query truncated counts on long periods.
+        getDocs(query(collection(db, `${base}/transactions`), where("createdAt", ">=", pStart))),
+        // Separate latest-50 query for the "Recent transactions" table.
         getDocs(query(collection(db, `${base}/transactions`), orderBy("createdAt", "desc"), limit(50))),
         getDocs(query(collection(db, `${base}/shifts`), orderBy("openedAt", "desc"), limit(15))),
         getDocs(collection(db, `${base}/operators`)),
@@ -235,17 +239,19 @@ export default function ReportsPage() {
     );
 
     // ── Transaction rows ──
-    const txData = txSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<TxRow, "id">) }));
-    setTxRows(txData);
-    setPeriodTransactions(txData.filter((t) => t.createdAt >= pStart).length);
+    const txPeriod = txPeriodSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<TxRow, "id">) }));
+    const txRecent = txRecentSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<TxRow, "id">) }));
+    setTxRows(txRecent);
+    setPeriodTransactions(txPeriod.filter((t) => t.status === "completed").length);
 
     // ── Operator breakdown (from period transactions) ──
     const opRevMap = new Map<string, { transactions: number; revenue: number }>();
-    txData.forEach((t) => {
-      if (t.createdAt < pStart) return;
+    txPeriod.forEach((t) => {
       if (t.status !== "completed") return;
-      const existing = opRevMap.get(t.operatorId) ?? { transactions: 0, revenue: 0 };
-      opRevMap.set(t.operatorId, {
+      // Owner sales have operatorId: null — group them under a synthetic "owner" key.
+      const key = t.operatorId ?? "__owner__";
+      const existing = opRevMap.get(key) ?? { transactions: 0, revenue: 0 };
+      opRevMap.set(key, {
         transactions: existing.transactions + 1,
         revenue: existing.revenue + (t.total ?? 0),
       });
@@ -255,7 +261,7 @@ export default function ReportsPage() {
       Array.from(opRevMap.entries())
         .map(([operatorId, stats]) => ({
           operatorId,
-          displayName: namesMap[operatorId] ?? operatorId,
+          displayName: operatorId === "__owner__" ? "👑 Owner" : (namesMap[operatorId] ?? operatorId),
           ...stats,
         }))
         .sort((a, b) => b.revenue - a.revenue)
