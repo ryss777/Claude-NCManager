@@ -26,6 +26,43 @@ interface Notification {
   data?: Record<string, unknown>;
 }
 
+// Older transfer notifications stored under `read` and had no title/message fields.
+// Coerce them to the new shape so the page renders them sensibly.
+function normalizeNotif(id: string, raw: Record<string, unknown>): Notification {
+  const type = (raw["type"] as string | undefined) ?? "unknown";
+  const isRead = (raw["isRead"] as boolean | undefined) ?? (raw["read"] as boolean | undefined) ?? false;
+  let title = raw["title"] as string | undefined;
+  let message = (raw["message"] as string | undefined) ?? (raw["body"] as string | undefined);
+  if (!title || !message) {
+    if (type === "transfer_incoming") {
+      title = title ?? "Transfer produk masuk";
+      const itemsRaw = raw["items"];
+      const items = Array.isArray(itemsRaw) ? itemsRaw as { productName: string; quantity: number }[] : [];
+      const itemSummary = items.length === 1
+        ? `${items[0]!.productName} ×${items[0]!.quantity}`
+        : `${items.length} produk`;
+      const total = raw["total"] as number | undefined;
+      const paymentType = raw["paymentType"] as string | undefined;
+      const totalLabel = paymentType === "pinjam"
+        ? "(pinjam)"
+        : `Rp ${(total ?? 0).toLocaleString("id-ID")}`;
+      message = message ?? `${itemSummary} — ${totalLabel}`;
+    } else {
+      title = title ?? "Notifikasi";
+      message = message ?? "";
+    }
+  }
+  return {
+    id,
+    type,
+    title,
+    message,
+    isRead,
+    createdAt: (raw["createdAt"] as string | undefined) ?? "",
+    ...(raw["data"] ? { data: raw["data"] as Record<string, unknown> } : {}),
+  };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const TYPE_ICON: Record<string, string> = {
@@ -68,7 +105,7 @@ export default function NotificationsPage() {
           orderBy("createdAt", "desc")
         )
       );
-      setNotifs(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Notification, "id">) })));
+      setNotifs(snap.docs.map((d) => normalizeNotif(d.id, d.data() as Record<string, unknown>)));
     } finally { setLoading(false); }
   }, [ownerId]);
 

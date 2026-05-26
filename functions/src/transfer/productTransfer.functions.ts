@@ -292,9 +292,17 @@ export const productTransfer_create = onCall(async (request) => {
       const notifRef = db
         .collection(COLLECTIONS.OWNER_NOTIFICATIONS(destinationOwnerId))
         .doc(transferRef.id);
+      const itemSummary = items.length === 1
+        ? `${items[0]!.productName} ×${items[0]!.quantity}`
+        : `${items.length} produk`;
+      const totalLabel = paymentType === "pinjam"
+        ? "(pinjam)"
+        : `Rp ${total.toLocaleString("id-ID")}`;
       tx.set(notifRef, {
         id: transferRef.id,
         type: "transfer_incoming",
+        title: "Transfer produk masuk",
+        message: `${itemSummary} dari owner ${ownerId} — ${totalLabel}`,
         status: "pending",
         transferId: transferRef.id,
         sourceOwnerId: ownerId,
@@ -305,7 +313,7 @@ export const productTransfer_create = onCall(async (request) => {
         total,
         notes: notes ?? null,
         createdAt: now,
-        read: false,
+        isRead: false,
       });
     }
 
@@ -519,7 +527,7 @@ export const productTransfer_accept = onCall(async (request) => {
     const notifRef = db
       .collection(COLLECTIONS.OWNER_NOTIFICATIONS(ownerId))
       .doc(transferId);
-    tx.set(notifRef, { status: "accepted", acceptedAt: now, read: true }, { merge: true });
+    tx.set(notifRef, { status: "accepted", acceptedAt: now, isRead: true }, { merge: true });
 
     // 4. Journal entry for bayar only (pinjam = free, no journal)
     if (paymentType === "bayar") {
